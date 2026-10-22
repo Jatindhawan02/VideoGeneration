@@ -1,0 +1,6 @@
+Tap Back multiple times from an error screen to reach the prompt entry point
+Persistent 'reach limit' errors may require repeated back actions to clear
+The target screen is identified by a visible prompt box for video generation
+If the editor is active, use 'Back to editor' or Close to exit before navigating
+Repeated tapping the back arrow is necessary to overcome stuck error states
+Ensure the final state is the initial prompt screen, not the editor interface

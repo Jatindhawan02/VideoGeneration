@@ -1,0 +1,827 @@
+"""Link -> video + caption. By default it does NOT post anything. main.py is untouched.
+Use: python main_link.py "PRODUCT_LINK"           (make video + caption only, you post by hand)
+     python main_link.py "PRODUCT_LINK" --post    (also posts the Reel on Instagram + links Creator Club auto-DM,
+                                                   ONLY if every video check passed)
+"""
+import io, os, re, sys, json, time
+import phone, agent, llm, find_product, yt_flow, script_writer, verify_video, supervisor, strict_checks, image_facts, factcheck
+from PIL import Image, ImageDraw, ImageFont
+from google.genai import types
+from config import PKG, SHORT_PROMPT_STYLE
+
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
+BASE = os.path.dirname(os.path.abspath(__file__))
+OUT_ROOT = os.path.join(BASE, "outputs_test")
+LOGS = os.path.join(BASE, "logs")
+STYLE = (SHORT_PROMPT_STYLE or "").strip().strip('"').strip("'")
+if STYLE.upper().startswith("SHORT_PROMPT_STYLE="):      # .env/config line was read with its name included
+    STYLE = STYLE.split("=", 1)[1].strip()
+
+YT_PKG = os.getenv("YTCREATE_PKG", "com.google.android.apps.youtube.producer")   # YouTube Create app
+VID_FOLDERS = ["/sdcard/Movies", "/sdcard/DCIM/Camera", "/sdcard/Download", "/sdcard/DCIM", "/sdcard/Pictures"]
+
+
+def step(name, res):
+    ok, why = res
+    print("[" + ("OK" if ok else "FAIL") + "] " + name + ": " + str(why))
+    if not ok:
+        raise RuntimeError(name + " failed: " + str(why))
+
+
+def clean_desc(t):
+    t = re.sub(r"(?:\u00c2)?[\u20b9\u00a5]\s?\d[\d,]*|Rs\.?\s?\d[\d,]*", "", t or "")
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def open_link(d, url):
+    for params in ({"url": url, "package": PKG["meesho"]}, {"url": url}):
+        try:
+            d.execute_script("mobile: deepLink", params)
+            return True
+        except Exception as e:
+            print("  deepLink try failed:", str(e)[:100])
+    return False
+
+
+_UNIT_WORDS = {"cm", "mm", "m", "kg", "gm", "g", "ml", "l", "ltr", "pc", "pcs", "in", "w", "v", "mah", "gb"}
+
+
+def screen_texts(d):
+    """All visible text on the current screen (free, from Appium, no AI)."""
+    out = []
+    try:
+        for n in agent._ui_nodes(d):
+            for v in (n.get("text"), n.get("desc")):
+                v = (v or "").strip()
+                if len(v) > 2 or v.lower() in _UNIT_WORDS:      # "Cm" / "Kg" / "Ml" are real spec values, keep them
+                    out.append(v)
+    except Exception:
+        pass
+    return out
+
+
+GALLERY_BOX = {"box": None}     # pixel box (x1, y1, x2, y2) of the big product picture, found once on the first screenshot
+
+
+def crop_product(im):
+    """Crop a screenshot (PIL image) to the product picture. Uses the real position found on screen;
+    only if that is unknown it falls back to the old fixed area (which misses the picture when a page has banners on top)."""
+    w, h = im.size
+    b = GALLERY_BOX.get("box")
+    if b:
+        x1, y1, x2, y2 = [max(0, int(v)) for v in b]
+        x2, y2 = min(x2, w), min(y2, h)
+        if x2 - x1 > 80 and y2 - y1 > 80:
+            return im.crop((x1, y1, x2, y2))
+    return im.crop((0, int(.08 * h), w, int(.55 * h)))
+
+
+def find_gallery_box(d, W, H):
+    """The big product picture from the app's own UI tree (no AI): the largest, roughly square image in the upper part of the screen."""
+    best = None
+    try:
+        for n in yt_flow.nodes(d):
+            x1, y1, x2, y2 = n["b"]
+            w, h = x2 - x1, y2 - y1
+            if "Image" not in (n.get("cls") or ""):
+                continue
+            if w < .5 * W or h < .15 * H or h > .65 * H or y1 > .6 * H or x2 > W + 5 or y2 > H + 5:
+                continue
+            if not (.6 <= h / float(w) <= 1.5):
+                continue
+            if best is None or w * h > (best[2] - best[0]) * (best[3] - best[1]):
+                best = (x1, y1, x2, y2)
+    except Exception:
+        pass
+    return best
+
+
+def ai_gallery_box(png):
+    """Fallback when the UI tree does not show the picture: ask the AI where the main product photo is. Returns a pixel box or None."""
+    im = Image.open(io.BytesIO(png))
+    W, H = im.size
+    prompt = (
+        "This is a screenshot of a product page in a shopping app. Find the ONE big main product photo of the gallery. "
+        "Do NOT include offer banners, the title, price, rating, thumbnails, dots or buttons. "
+        "Return JSON: {\"box\": [ymin, xmin, ymax, xmax]} with every number from 0 to 1000 "
+        "(1000 = the full height for ymin/ymax and the full width for xmin/xmax)."
+    )
+
+    def _parse_box(text):
+        """Tolerant: accepts ```json fences, extra words around the JSON, 'box' or 'box_2d', numbers as text."""
+        t = (text or "").strip()
+        b = None
+        mm = re.search(r"\{.*\}", t, re.S)
+        if mm:
+            try:
+                data = json.loads(mm.group(0))
+                b = data.get("box") or data.get("box_2d") or data.get("bbox")
+            except Exception:
+                b = None
+        if not b:                                   # last resort: the first 4 numbers in the answer
+            nums = re.findall(r"-?\d+(?:\.\d+)?", t)
+            b = nums[:4] if len(nums) >= 4 else None
+        y1, x1, y2, x2 = [float(v) for v in b]
+        return y1, x1, y2, x2
+
+    def validate(text):
+        try:
+            y1, x1, y2, x2 = _parse_box(text)
+            if not (0 <= y1 < y2 <= 1000 and 0 <= x1 < x2 <= 1000):
+                return "box numbers must be 0-1000 with min < max"
+            if (y2 - y1) * (x2 - x1) < 80000:
+                return "box is too small to be the main picture"
+        except Exception:
+            return "not valid JSON with a 'box' of 4 numbers"
+        return None
+    try:
+        part = types.Part.from_bytes(data=agent.shrink(png, 720), mime_type="image/jpeg")
+        y1, x1, y2, x2 = _parse_box(llm.generate([part, prompt], validate=validate))
+        return (x1 * W / 1000, y1 * H / 1000, x2 * W / 1000, y2 * H / 1000)
+    except Exception as e:
+        print("  (AI could not find the product picture area:", str(e)[:100], ")")
+        return None
+
+
+def _sig(png):
+    """Tiny grayscale fingerprint of the image-carousel area (to tell if the picture changed)."""
+    im = Image.open(io.BytesIO(png)).convert("L")
+    w, h = im.size
+    return list(crop_product(im).resize((24, 24)).getdata())
+
+
+def _same(a, b):
+    return sum(abs(x - y) for x, y in zip(a, b)) / len(a) < 4
+
+
+def _swipe(d, x1, y1, x2, y2):
+    phone.adb("shell", "input swipe %d %d %d %d 350" % (x1, y1, x2, y2))
+
+
+def _ignore_bad_reference(report):
+    """If the reference picture itself shows no product, 'same product' cannot be judged. That is not a fault of the video,
+    so it must not cost another 12 minutes of generation."""
+    c = report.get("checks", {})
+    if c.get("same_product") is False and re.search(r"reference:\s*no product|no product image|no product visible", str(report.get("reason", "")), re.I):
+        c["same_product"] = None
+        failed = [name for name, v in c.items() if v is False]
+        print("  (same_product skipped: the reference picture shows no product, so it cannot be compared)")
+        if not failed:
+            report["pass"] = True
+            report["reason"] = "ok (same product NOT checked: the reference picture showed no product)"
+        else:
+            report["reason"] = "failed: " + ", ".join(failed)
+    return report
+
+
+_OTHER_PRODUCTS = re.compile(r"similar products|more like this|you may also like|products for you|recommended for you|sponsored", re.I)
+
+
+def capture_pages(d, out_dir, max_images=6, info_pages=1):
+    """1) swipe LEFT on the image carousel and screenshot each product picture,
+       2) then scroll DOWN a little to screenshot the product info.
+       Returns (carousel_shots, info_shots, texts); shots are (path, png)."""
+    W, H = agent._screen(d)
+    carousel, info, texts, prev = [], [], [], None
+    first = phone.screenshot(d)
+    box, how = find_gallery_box(d, W, H), "UI tree"
+    if not box:
+        box, how = ai_gallery_box(first), "AI"
+    GALLERY_BOX["box"] = box
+    print("  product picture area on the screen (%s): %s" % (how, tuple(int(v) for v in box) if box else "not found, using the old fixed area"))
+    if box:
+        sy = int((box[1] + box[3]) / 2)
+        sx1, sx2 = int(box[0] + .85 * (box[2] - box[0])), int(box[0] + .15 * (box[2] - box[0]))
+    else:
+        sy, sx1, sx2 = int(.28 * H), int(.85 * W), int(.15 * W)
+    for i in range(max_images):
+        png = phone.screenshot(d)
+        sig = _sig(png)
+        if prev is not None and _same(sig, prev):       # swipe did nothing: last picture reached
+            break
+        prev = sig
+        path = os.path.join(out_dir, "product.png" if i == 0 else "image_%d.png" % (i + 1))
+        with open(path, "wb") as f:
+            f.write(png)
+        carousel.append((path, png))
+        texts += screen_texts(d)
+        _swipe(d, sx1, sy, sx2, sy)                                          # next picture
+        time.sleep(1.5)
+    for j in range(info_pages):
+        _swipe(d, int(.5 * W), int(.80 * H), int(.5 * W), int(.30 * H))       # scroll down ONCE to the product details
+        time.sleep(2)
+        now = screen_texts(d)
+        if j > 0 and any(_OTHER_PRODUCTS.search(t) for t in now):             # other products started: the details are over
+            print("  (other products are showing -> stopped scrolling)")
+            break
+        png = phone.screenshot(d)
+        path = os.path.join(out_dir, "info_%d.png" % (j + 1))
+        with open(path, "wb") as f:
+            f.write(png)
+        info.append((path, png))
+        texts += now
+    print("  %d product photos + %d info screenshots liye" % (len(carousel), len(info)))
+    return carousel, info, texts
+
+
+def _font(size):
+    try:
+        return ImageFont.load_default(size=size)
+    except Exception:
+        for name in ("arial.ttf", "DejaVuSans-Bold.ttf"):
+            try:
+                return ImageFont.truetype(name, size)
+            except Exception:
+                pass
+    return ImageFont.load_default()
+
+
+def numbered_collage(shots, cols=3, tw=360):
+    """The carousel pictures (product area only) in ONE image, each tile with a red number 1, 2, 3..."""
+    tiles = []
+    for i, (_, png) in enumerate(shots, 1):
+        im = Image.open(io.BytesIO(png)).convert("RGB")
+        im = crop_product(im)
+        im = im.resize((tw, max(1, int(im.height * tw / im.width))))
+        dr = ImageDraw.Draw(im)
+        dr.rectangle((0, 0, 60, 52), fill=(210, 0, 0))
+        dr.text((14, 4), str(i), fill=(255, 255, 255), font=_font(38))
+        tiles.append(im)
+    rows = [tiles[i:i + cols] for i in range(0, len(tiles), cols)]
+    th = max(t.height for t in tiles)
+    canvas = Image.new("RGB", (cols * tw, len(rows) * th), (255, 255, 255))
+    for r, row in enumerate(rows):
+        for c, t in enumerate(row):
+            canvas.paste(t, (c * tw, r * th))
+    buf = io.BytesIO()
+    canvas.save(buf, "JPEG", quality=85)
+    return buf.getvalue()
+
+
+IMG_TYPES = ("product", "model", "size_chart", "infographic", "other")
+
+
+def classify_images(carousel):
+    """One AI look at all gallery pictures (numbered collage): which is the product itself, which is a person wearing it,
+    which is a size chart or a text/infographic picture. Returns {number: {"type":..., "clear":bool, "text":bool}}."""
+    shots = carousel[:6]
+    prompt = (
+        "This is ONE collage of the picture gallery of a single product on a shopping app. Every tile has a red number.\n"
+        "Classify EVERY numbered tile:\n"
+        "- product: the product itself shown alone (flat lay, on a hanger, on a plain background, or several colours/variants of it side by side)\n"
+        "- model: a real person wearing or holding the product\n"
+        "- size_chart: a size or measurement table / size guide\n"
+        "- infographic: feature icons, headings, offers, or any picture that is mostly added text or graphics\n"
+        "- other: anything else (packaging, unrelated photo, group photo)\n"
+        "clear = the product is large and clearly visible in the tile. text = big text, table, price or logo ADDED on top of the picture "
+        "(print on the product itself does not count).\n"
+        "Return JSON: {\"images\": [{\"n\": 1, \"type\": \"product|model|size_chart|infographic|other\", \"clear\": true, \"text\": false}]} "
+        "with one entry for every tile."
+    )
+
+    def validate(text):
+        try:
+            items = json.loads(text).get("images")
+            if not isinstance(items, list) or len(items) < len(shots):
+                return "need one entry for each of the %d tiles" % len(shots)
+            for it in items:
+                if str(it.get("type", "")).strip().lower() not in IMG_TYPES:
+                    return "type must be one of " + ", ".join(IMG_TYPES)
+        except Exception:
+            return "not valid JSON"
+        return None
+
+    try:
+        part = types.Part.from_bytes(data=numbered_collage(shots), mime_type="image/jpeg")
+        items = json.loads(llm.generate([part, prompt], validate=validate))["images"]
+    except Exception as e:
+        print("  (gallery photos could not be classified:", str(e)[:100], ")")
+        return {}
+    out = {}
+    for it in items:
+        try:
+            n = int(it.get("n"))
+        except Exception:
+            continue
+        flag = lambda v, default: default if v is None else (v if isinstance(v, bool) else str(v).strip().lower() in ("true", "yes"))
+        out[n] = {"type": str(it.get("type", "")).strip().lower(), "clear": flag(it.get("clear"), True), "text": flag(it.get("text"), False)}
+    return out
+
+
+def gallery_for_text(carousel, cls, limit=5):
+    """Cropped gallery pictures (JPEG bytes) for reading their printed text. Pictures with added text/infographics/size charts first."""
+    order = list(range(min(len(carousel), 6)))
+    def has_text(i):
+        c = (cls or {}).get(i + 1)
+        return bool(c) and (c["type"] in ("infographic", "size_chart", "other") or c["text"])
+    order.sort(key=lambda i: (not has_text(i), i))
+    out = []
+    for i in order[:limit]:
+        try:
+            im = crop_product(Image.open(carousel[i][0]).convert("RGB"))
+            b = io.BytesIO()
+            im.save(b, "JPEG", quality=88)
+            out.append(b.getvalue())
+        except Exception as e:
+            print("  (gallery picture %d skipped: %s)" % (i + 1, str(e)[:60]))
+    return out
+
+
+def choose_references(carousel, cls, max_refs=3):
+    """Indexes (into carousel) of the pictures to give YouTube Create, best first.
+    Only pictures of the PRODUCT itself. Size charts, text/infographic pictures and group photos are never used.
+    A photo of a person is used only if there is no product-only picture (then just one, and the prompt asks for a NEW model)."""
+    if not cls:
+        print("  reference photo: classification not available -> using the first picture only")
+        return [0]
+    rows = []
+    for i in range(min(len(carousel), 6)):
+        c = cls.get(i + 1, {"type": "other", "clear": False, "text": False})
+        rows.append((i, c))
+        print("   picture %d: %s%s%s" % (i + 1, c["type"], "" if c["clear"] else " (not clear)", " (added text)" if c["text"] else ""))
+    products = [i for i, c in rows if c["type"] == "product" and c["clear"] and not c["text"]]
+    if products:
+        picked = products[:max_refs]
+    else:
+        models = [i for i, c in rows if c["type"] == "model" and c["clear"] and not c["text"]]
+        picked = models[:1]
+    if not picked:
+        picked = [i for i, c in rows if c["type"] in ("product", "model")][:1] or [0]
+    print("  reference pictures used for the video: %s (from %d gallery pictures)" % ([i + 1 for i in picked], len(rows)))
+    return picked
+
+
+COMBO_RE = re.compile(r"\bcombo\b|\bfree\b|\+", re.I)
+COMBO_RULE = (" This is a COMBO of separate products. Show each item as its own separate object, exactly as in the "
+              "reference photo (same shape and colour). Never merge them or hide one inside another.")
+
+_NOISE = re.compile(r"add to cart|buy now|wishlist|rating|review|delivery|return|\u20b9|\brs\.?\s?\d|% off|sold by|seller|cash on|"
+                    r"see all|view all|similar products|sponsored|activate windows", re.I)
+# size / capacity / quantity / material words: a photo cannot prove or disprove these, so they are never deleted because of the photo
+_SPEC = re.compile(r"\d\s*(ml|ltr|litre|liter|l|cm|mm|m|kg|gm|g|w|watt|v|mah|pcs|pc|pack|set|inch|in)\b|"
+                   r"\b(plastic|steel|stainless|abs|cotton|polyester|wood|wooden|metal|glass|silicone|leather|nylon|aluminium|aluminum|ceramic|"
+                   r"rubber|material|capacity|watt|rpm|warranty)\b", re.I)
+
+
+_DIM_LABEL = re.compile(r"^product\s+(height|length|width|weight|thickness|depth|diameter|size)$", re.I)
+_NUM_ONLY = re.compile(r"^\d+(?:\.\d+)?$")
+
+
+def _spec_pairs(texts):
+    """The Product Highlights card shows label and value as SEPARATE texts ('Product Height', '1.5', 'Product Unit', 'Cm').
+    Join them into readable lines such as 'Product Height: 1.5 Cm' so the fact check can find them."""
+    clean = [re.sub(r"\s+", " ", t or "").strip() for t in texts]
+    unit = next((t for t in clean if t.lower() in _UNIT_WORDS), "")
+    out = []
+    for k, t in enumerate(clean):
+        if _DIM_LABEL.match(t):
+            val = next((x for x in clean[k + 1:k + 4] if _NUM_ONLY.match(x)), "")
+            if val:
+                line = ("%s: %s %s" % (t, val, unit)).strip()
+                if line not in out:
+                    out.append(line)
+    return out
+
+
+def build_page_text(texts, limit=1500):
+    """The text Appium read from the app screens (title, product highlights, details), without price/rating/button noise.
+    This is a TRUSTED source for material, size, capacity, quantity and specs (a photo cannot show those)."""
+    seen, out = set(), []
+    for t in texts:
+        t = re.sub(r"\s+", " ", t or "").strip()
+        if not re.search(r"[A-Za-z0-9\u0900-\u097F]", t) or t.lower() in seen or _NOISE.search(t):
+            continue
+        seen.add(t.lower())
+        out.append(t)
+    return " | ".join(_spec_pairs(texts) + out)[:limit]
+
+
+def _page_supports(claim, page_text):
+    """True if the page says it: the whole phrase, or most of its words (prefix match: 'supported' ~ 'support').
+    page_text here = everything trusted: the page text, the full title from the link, and the text printed on the pictures."""
+    c, pt = claim.lower().strip(), (page_text or "").lower()
+    if c and c in pt:
+        return True
+    toks = [t for t in re.findall(r"[a-z0-9]+", c) if len(t) > 1]
+    if not toks:
+        return False
+    words = set(re.findall(r"[a-z0-9]+", pt))
+    def has(t):
+        return t in words or (len(t) > 3 and any(w.startswith(t[:4]) and (w.startswith(t) or t.startswith(w)) for w in words if len(w) > 3))
+    sig = [t for t in toks if len(t) > 3] or toks
+    return sum(has(t) for t in sig) >= max(1, int(round(0.6 * len(sig))))
+
+
+def trusted_text(p):
+    """Every source that can prove a spec/feature: page text, full title from the link, text printed on the pictures."""
+    return " ".join([p.get("page_text") or "", factcheck.url_title(p.get("url") or ""), p.get("name") or "", p.get("image_text") or ""])
+
+
+def ground_product(p, ref_path):
+    """The name/description came from page text and small screenshots, and the AI can invent details there
+    (for example 'butterfly print' on a T-shirt set that really shows cats, a heart, 'Princess' and pandas).
+    One careful look at the real reference picture: describe what is VISIBLE (this becomes the main source of truth
+    for the script and caption) and delete description sentences the picture contradicts."""
+    try:
+        with open(ref_path, "rb") as f:
+            png = f.read()
+        prompt = (
+            "Look closely at this product picture.\nProduct name: " + p["name"] + "\n"
+            "Description taken from the page (may contain mistakes): " + (p["description"] or "none") + "\n"
+            "Text read from the app screens (TRUSTED for size, capacity, material, quantity and specs): " + (p.get("page_text") or "none")[:1200] + "\n"
+            "Text printed on the product's own pictures (TRUSTED for specs, charging type, what is in the box): " + (p.get("image_text") or "none")[:1200] + "\n\n"
+            "1) summary: describe ONLY the product itself (not people) in 1 to 3 plain sentences: how many items, the colour of each, "
+            "and EXACTLY what each print, graphic or text on it shows (read any words). Do not guess what you cannot see.\n"
+            "2) wrong_claims: short phrases from the page description that describe the LOOK (a print, pattern, colour, shape, number of items) "
+            "and that the picture clearly contradicts. NEVER list size, capacity (ml, cm), material, quantity, specs or anything the screen text "
+            "above confirms: a photo cannot judge those. Empty list if none.\n"
+            "Return JSON: {\"summary\": \"...\", \"wrong_claims\": [\"...\"]}"
+        )
+
+        def validate(text):
+            try:
+                data = json.loads(text)
+                if not str(data.get("summary", "")).strip():
+                    return "no summary"
+                if not isinstance(data.get("wrong_claims", []), list):
+                    return "wrong_claims must be a list"
+            except Exception:
+                return "not valid JSON"
+            return None
+
+        part = types.Part.from_bytes(data=agent.shrink(png, 900), mime_type="image/jpeg")
+        out = json.loads(llm.generate([part, prompt], validate=validate))
+    except Exception as e:
+        print("  (product photo could not be double-checked:", str(e)[:100], ")")
+        return p
+    q = dict(p)
+    q["visible"] = clean_desc(out.get("summary", ""))
+    desc = p.get("description") or ""
+    sents = [s for s in re.split(r"(?<=[.!?])\s+", desc) if s.strip()]
+    for w in out.get("wrong_claims", []):
+        w = str(w).strip().lower()
+        if len(w) < 4:
+            continue
+        if _SPEC.search(w) or _page_supports(w, trusted_text(p)):
+            print("  kept in the description (size/material/spec or the page text says so): '" + w + "'")
+            continue
+        kept = [s for s in sents if w not in s.lower()]
+        if len(kept) < len(sents):
+            print("  removed from the description (the picture does not show it): '" + w + "'")
+            sents = kept
+    q["description"] = " ".join(sents)
+    print("  Photo me asli me dikh raha hai:", q["visible"])
+    return q
+
+
+def get_product(shots, texts):
+    """AI reads the product name + description from all screenshots and the on-screen text. No questions asked."""
+    name, desc = "", ""
+    seen, hint = set(), []
+    for t in texts:
+        t = clean_desc(t)
+        if t and t not in seen:
+            seen.add(t)
+            hint.append(t)
+    hint_text = " | ".join(hint)[:2500]
+    prompt = (
+        "These are screenshots of one product page in the Meesho shopping app (product photos and the info section below them).\n"
+        "Text that was found on the screens (may include buttons and noise): " + hint_text + "\n\n"
+        "Find the product. Return JSON: {\"name\": \"short product name, 3-8 words, no price\", "
+        "\"description\": \"1-2 short sentences with the real features (material, size, use, what is in the box) "
+        "that are visible. No price, discount, rating or delivery info. Do not invent anything.\"}"
+    )
+
+    def validate(text):
+        try:
+            data = json.loads(text)
+            if not isinstance(data, dict) or not str(data.get("name", "")).strip():
+                return "no product name in answer"
+        except Exception:
+            return "not valid JSON"
+        return None
+
+    try:
+        imgs = [types.Part.from_bytes(data=agent.shrink(png, 720), mime_type="image/jpeg") for _, png in shots[:4]]
+        info = json.loads(llm.generate(imgs + [prompt], validate=validate))
+        name = str(info.get("name", "")).strip()
+        desc = clean_desc(info.get("description", ""))
+    except Exception as e:
+        print("  AI product page nahi padh paya:", str(e)[:120])
+    print("\nProduct page se mila:")
+    print("  Naam       :", name or "(nahi mila)")
+    print("  Description:", desc or "(nahi mila)")
+    if not name:        # only ask when the AI could not find it at all
+        name = input("Naam nahi mila. Product ka naam type karo: ").strip()
+    if not name:
+        raise RuntimeError("Product ka naam nahi mila. Dobara chalao.")
+    return {"name": name, "description": desc}
+
+
+def list_mp4():
+    pattern = " ".join(f + "/*.mp4" for f in VID_FOLDERS)
+    out = phone.adb("shell", "ls -t " + pattern + " 2>/dev/null")
+    return [l.strip() for l in out.splitlines() if l.strip().startswith("/")]
+
+
+def create_video(d, p, shot_remote, prompt=None, n_images=1):
+    """YouTube Create via yt_flow (fixed, verified UI steps, no AI). Returns the mp4 path on the phone.
+    prompt = the researched script prompt from script_writer (falls back to the old plain prompt)."""
+    if not prompt:
+        prompt = STYLE + " Product: " + p["name"] + ". Details: " + p["description"]
+    return yt_flow.run(d, prompt, n_images)
+
+
+LAST_POST = {"caption": "", "tags": ""}
+
+
+def write_post(out_dir, url, p, script=None, report=None):
+    prompt = (
+        "You write Instagram Reel captions for an Indian affiliate creator.\n"
+        "Product: " + p["name"] + "\n"
+        "Details from the page: " + (p["description"] or "none") + "\n"
+        + (("What the product photo really shows (looks): " + p["visible"] + "\n") if p.get("visible") else "")
+        + (("Specs read from the page: " + p["page_text"][:600] + "\n") if p.get("page_text") else "") +
+        "Use ONLY these facts. Do not invent discounts, ratings, materials, sizes or claims.\n"
+        "Rules: simple Hinglish (Hindi in English letters), cute friendly tone, catchy first line, 2-3 short lines, "
+        "no price, no words like 'guaranteed' or 'best', at most 3 emojis.\n"
+        "Just before the last line add: (Affiliate link - I may earn a commission)\n"
+        "The caption must END with the exact line: Comment LINK to get the link in your DM\n"
+        "Return JSON: {\"caption\": \"...\", \"hashtags\": [\"#...\"]} with 6 to 8 hashtags including #ad"
+    )
+    caption, tags = "", ""
+    try:
+        data = json.loads(llm.generate([prompt]))
+        caption = str(data.get("caption", "")).strip()
+        h = data.get("hashtags", [])
+        tags = " ".join(h) if isinstance(h, list) else str(h)
+    except Exception as e:
+        print("  caption nahi bana:", str(e)[:150])
+        caption = "(Caption nahi bana. Thodi der baad dobara try karo.)"
+    LAST_POST["caption"], LAST_POST["tags"] = caption, tags
+    text = ("PRODUCT: " + p["name"] + "\nLINK: " + url + "\n\nCAPTION:\n" + caption + "\n\nHASHTAGS:\n" + tags + "\n")
+    if script:
+        text += "\nVOICEOVER SCRIPT:\n" + script["voiceover"] + "\n"
+    if report:
+        text += ("\nVIDEO CHECK: " + ("PASS" if report.get("pass") else "FAILED - dekh ke hi post karna") + "\n"
+                 + "Reason: " + str(report.get("reason")) + "\n"
+                 + "What the video says: " + str(report.get("transcript")) + "\n"
+                 + "What the video shows: " + str(report.get("summary")) + "\n")
+    path = os.path.join(out_dir, "post.txt")
+    with open(path, "w", encoding="utf-8-sig") as f:
+        f.write(text)
+    print("\n" + text)
+    return path
+
+
+CTA_LINE = "Comment LINK to get the link in your DM"
+DISCLOSURE = "(Affiliate link - I may earn a commission)"
+
+
+def build_instagram_caption():
+    """Caption + hashtags exactly as they will be typed in Instagram. Returns None if the caption is not usable."""
+    cap = (LAST_POST["caption"] or "").strip()
+    tags = (LAST_POST["tags"] or "").strip()
+    if not cap or cap.startswith("(Caption nahi bana"):
+        return None
+    if DISCLOSURE.lower() not in cap.lower():
+        cap = cap + "\n" + DISCLOSURE
+    if CTA_LINE.lower() not in cap.lower():
+        cap = cap + "\n" + CTA_LINE
+    if "#ad" not in (" " + tags.lower() + " "):
+        tags = (tags + " #ad").strip()
+    return (cap + "\n\n" + tags).strip()[:2200]
+
+
+def post_to_instagram(d, out_dir, p, report):
+    """Post video.mp4 as a Reel, then link the Meesho Creator Club auto-DM (keyword: Link).
+    Refuses to post when the checks did not pass or the voice could not be checked."""
+    checks = (report or {}).get("checks", {})
+    if not report or not report.get("pass"):
+        print("\nPOST NAHI KIYA: video checks pass nahi hue (%s)." % (report or {}).get("reason"))
+        return False
+    if checks.get("pronunciation") is None or checks.get("same_product") is None:
+        print("\nPOST NAHI KIYA: voice ya product match check nahi ho paya. Khud dekh ke post karo.")
+        return False
+    cap = build_instagram_caption()
+    if not cap:
+        print("\nPOST NAHI KIYA: caption nahi bana.")
+        return False
+    marker = os.path.join(out_dir, "posted.txt")
+    if os.path.exists(marker):
+        print("\nPOST NAHI KIYA: is folder ka video pehle hi post ho chuka hai (posted.txt).")
+        return False
+    video = os.path.join(out_dir, "video.mp4")
+    remote_video = "/sdcard/Movies/reel_%s.mp4" % os.path.basename(out_dir)
+    print("\n6/7 Instagram Reel post ho raha hai...")
+    print("  caption:\n" + cap)
+    phone.push_media(video, remote_video)
+    phone.adb("shell", "touch", remote_video)
+    time.sleep(2)
+    phone.open_app(d, PKG["instagram"])
+    ok, why = agent.run_task(d,
+        "In Instagram, create a new Reel using the video '" + os.path.basename(remote_video) + "' (the most recent video in the gallery). "
+        "Proceed through the next screens without adding music, effects or stickers, and when asked for the caption type exactly the text provided. "
+        "Then tap Share. Done when the Reel is shared / uploading confirmation appears.",
+        max_steps=45, key="instagram_post", texts=[cap])
+    print("  instagram:", "OK" if ok else "FAIL", "-", why)
+    if not ok:
+        print("POST SHAYAD NAHI HUA. Instagram khol ke check karo, phir manually post karo. Caption post.txt me hai.")
+        return False
+    with open(marker, "w", encoding="utf-8") as f:
+        f.write(time.strftime("%Y-%m-%d %H:%M:%S") + "\n")
+    time.sleep(30)
+    print("7/7 Meesho Creator Club auto-DM link ho raha hai...")
+    phone.open_app(d, PKG["meesho"])
+    ok2, why2 = agent.run_task(d,
+        "In the Meesho app open Creator Club and find the auto DM option. Select the Instagram post/reel I just posted "
+        "(the newest one) for the product '" + p["name"] + "' and confirm so the auto DM is linked to that post. "
+        "If it asks for a comment keyword / trigger word, use exactly: Link. "
+        "Done when it shows the auto DM is active/linked to the post.",
+        max_steps=50, key="creator_club")
+    print("  creator club:", "OK" if ok2 else "FAIL", "-", why2)
+    if not ok2:
+        print("Reel post ho gaya, par Creator Club auto-DM link NAHI hua. Meesho me manually link karo.")
+    return ok and ok2
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    do_post = "--post" in sys.argv[1:]
+    if len(args) < 1:
+        print('Use: python main_link.py "PRODUCT_LINK" [--post]')
+        return
+    url = args[0].strip()
+    os.makedirs(LOGS, exist_ok=True)
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    out_dir = os.path.join(OUT_ROOT, stamp)
+    os.makedirs(out_dir, exist_ok=True)
+    d = None
+    try:
+        print("1/5 Phone connect ho raha hai...")
+        d = phone.connect()
+        print("2/5 Link phone pe khol raha hoon...")
+        if not open_link(d, url):
+            raise RuntimeError("Link phone pe nahi khula. Link sahi hai? Meesho app installed hai?")
+        time.sleep(10)
+        print("3/5 Product ki photos (carousel) aur info ke screenshots le raha hoon...")
+        carousel, info, texts = capture_pages(d, out_dir)
+        if not carousel:
+            raise RuntimeError("Product page ka screenshot nahi mila.")
+        print("   Gallery ki photos pehchan raha hoon (product / model / size chart)...")
+        cls = classify_images(carousel)
+        if cls and not any(c["type"] in ("product", "model") for c in cls.values()):
+            print("  (no product picture in the crops -> asking the AI where the picture is on the screen)")
+            _b = ai_gallery_box(carousel[0][1])
+            if _b:
+                GALLERY_BOX["box"] = _b
+                cls = classify_images(carousel)
+        refs = choose_references(carousel, cls)
+        ref_files = []         # cropped to the product picture only (no app screen, prices or buttons)
+        for _n, _idx in enumerate(refs):
+            try:
+                _im = Image.open(carousel[_idx][0])
+                _ref = os.path.join(out_dir, "reference.png" if _n == 0 else "reference_%d.png" % (_n + 1))
+                crop_product(_im).save(_ref)
+                ref_files.append(_ref)
+            except Exception as e:
+                print("  (reference crop skipped:", str(e)[:80], ")")
+        shot_local = ref_files[0] if ref_files else carousel[0][0]
+        print("   Product ki jaankari nikal raha hoon...")
+        ai_shots = carousel[:1] + info + carousel[1:2]       # main photo, info section, one more photo
+        p = get_product(ai_shots, texts)
+        p["page_text"] = build_page_text(texts)
+        p["url"] = url                                    # the link holds the full product title
+        p["gallery"] = gallery_for_text(carousel, cls)    # the product's own pictures, text/spec pictures first
+        image_facts.read(p)                               # specs and features PRINTED on those pictures (trusted source)
+        p = ground_product(p, shot_local)       # the photo decides LOOKS (prints, colours); the page text decides specs
+        print("   Product ki research + viral Hinglish script ban rahi hai...")
+        script = script_writer.make_script(p)
+        print("  Voiceover:", script["voiceover"])
+        print("  Voice text (Devanagari):", script.get("voice_hi", ""))
+        print("  Meaning:", script.get("meaning", ""))
+        prompt = script["yt_prompt"]
+        is_combo = bool(COMBO_RE.search((p["name"] + " " + url.replace("-", " ")).lower()))
+        if is_combo:
+            prompt = prompt.rstrip() + COMBO_RULE
+            print("  combo product detected -> added the 'keep items separate' rule to the prompt")
+        print("  YouTube prompt (%d chars): %s" % (len(prompt), prompt))
+        with open(os.path.join(out_dir, "yt_prompt.txt"), "w", encoding="utf-8-sig") as _f:
+            _f.write(prompt)
+        best, report = None, None
+        MAX_TRIES = int(os.getenv("MAX_VIDEO_TRIES", "5"))
+        for attempt in range(1, MAX_TRIES + 1):
+            supervisor.reset()
+            shot_remote = "/sdcard/Pictures/product_shot_%d.png" % int(time.time())   # new name = newest in the picker
+            for _n, _p2 in reversed(list(enumerate(ref_files[1:], 2))):       # extra product pictures first, main one last (= newest)
+                try:
+                    _r2 = "/sdcard/Pictures/product_shot_%d_%d.png" % (int(time.time()), _n)
+                    phone.push_media(_p2, _r2)
+                    phone.adb("shell", "touch", _r2)
+                    time.sleep(1.5)
+                except Exception as _e:
+                    print("  (extra photo skipped:", str(_e)[:80], ")")
+            phone.push_media(shot_local, shot_remote)
+            phone.adb("shell", "touch", shot_remote)
+            time.sleep(2)
+            print("4/5 YouTube Create me video ban raha hai, try %d/%d (kuch minute lag sakte hain)..." % (attempt, MAX_TRIES))
+            try:
+                remote = create_video(d, p, shot_remote, prompt, n_images=max(1, len(ref_files)))
+            except supervisor.FlowProblem as fp:        # the watcher saw an error on screen while waiting
+                print("  [watcher] stopped waiting:", fp)
+                prompt = supervisor.fix_prompt(p, script, prompt, fp, attempt)
+                continue
+            except RuntimeError as e:                   # a fixed step failed: ask the AI what the screen shows
+                print("  [flow] step failed:", str(e)[:200])
+                if supervisor.unstick(d, e):            # unexpected dialog/screen: AI clears it, same prompt again
+                    continue
+                fp = supervisor.diagnose_failure(d, e)
+                prompt = supervisor.fix_prompt(p, script, prompt, fp, attempt)
+                continue
+            except Exception as e:                      # e.g. Appium session died: reconnect and try again
+                print("  [flow] unexpected error:", str(e)[:200], "-> reconnecting to the phone")
+                try:
+                    d.quit()
+                except Exception:
+                    pass
+                time.sleep(3)
+                d = phone.connect()
+                continue
+            local = os.path.join(out_dir, "video_try%d.mp4" % attempt)
+            phone.adb("pull", remote, local)
+            if not os.path.exists(local) or os.path.getsize(local) == 0:
+                raise RuntimeError("Video laptop pe copy nahi hua: " + remote)
+            print("  video saved:", local)
+            try:
+                import trim
+                local = trim.trim_reference_end(local, shot_local)   # cut the screenshot added at the end
+            except Exception as e:
+                print("  (trim skipped:", str(e)[:80], ")")
+            print("   Video ke frames aur awaaz check ho rahi hai...")
+            try:
+                report = verify_video.check_video(local, p, script)
+            except Exception as e:
+                report = {"pass": False, "reason": "check could not run: " + str(e)[:150],
+                          "transcript": "", "summary": "", "checks": {}}
+            # The free AI providers cannot hear audio. Do not throw away a good video (and 12 minutes of
+            # generation) only because the audio could not be checked.
+            c, rs = report.get("checks", {}), str(report.get("reason", "")).lower()
+            if (not report["pass"] and "audio" in rs and "not provided" in rs
+                    and c.get("frames_show_product") and c.get("frames_clean") and c.get("no_bad_claims")):
+                report["pass"] = True
+                report["reason"] = "frames OK; audio could NOT be checked by AI - listen to it yourself before posting"
+            # Strict, code-based checks: the words the voice really said vs the script, and the product vs the reference photo
+            try:
+                report = strict_checks.apply(report, local, shot_local, p, script, ref_paths=ref_files or [shot_local])
+            except Exception as e:
+                print("  (strict checks could not run:", str(e)[:120], ")")
+            report = _ignore_bad_reference(report)
+            print("  check:", report["checks"], "->", report["reason"])
+            print("  said :", report["transcript"])
+            best = local
+            if report["pass"]:
+                break
+            prompt = script_writer.retry_prompt(p, script, report["reason"])
+            if is_combo:
+                prompt = prompt.rstrip() + COMBO_RULE
+        if not best:
+            raise RuntimeError("Video %d tries me bhi nahi bana. Logs dekho." % MAX_TRIES)
+        import shutil
+        final = os.path.join(out_dir, "video.mp4")
+        shutil.copyfile(best, final)
+        if not report["pass"]:
+            print("\nWARNING: video 2 baar check me fail hui. Video rakh li hai, par post karne se pehle khud dekh lo.")
+        print("5/5 Caption ban raha hai...")
+        write_post(out_dir, url, p, script, report)
+        print("\nTAIYAAR! Folder:", out_dir)
+        print("Video phone ki gallery mein bhi hai. Dekh lo, sahi lage to post kar do.")
+        try:
+            os.startfile(out_dir)
+        except Exception:
+            pass
+        if do_post:
+            try:
+                post_to_instagram(d, out_dir, p, report)
+            except Exception as e:      # the video + caption are already saved, so this is not a total failure
+                print("\nPOSTING FAIL:", str(e)[:200], "- video aur caption folder me safe hain, manually post karo.")
+    except Exception as e:
+        print("\nFAILED:", e)
+        try:
+            with open(os.path.join(LOGS, "fail_link_" + stamp + ".png"), "wb") as f:
+                f.write(phone.screenshot(d))
+        except Exception:
+            pass
+        sys.exit(1)
+    finally:
+        try:
+            if d:
+                d.quit()
+        except Exception:
+            pass
+
+
+main()

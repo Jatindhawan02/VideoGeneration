@@ -1,0 +1,257 @@
+Traceback (most recent call last):
+  File "C:\affiliate-bot\affiliate-bot\main.py", line 53, in run
+    p, png = find_product.find_affiliate_product(d)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\affiliate-bot\affiliate-bot\find_product.py", line 40, in find_affiliate_product
+    ok, why = agent.run_task(d, goal, max_steps=45)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\affiliate-bot\affiliate-bot\agent.py", line 40, in run_task
+    png = phone.screenshot(d)
+          ^^^^^^^^^^^^^^^^^^^
+  File "C:\affiliate-bot\affiliate-bot\phone.py", line 23, in screenshot
+    return d.get_screenshot_as_png()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\selenium\webdriver\remote\webdriver.py", line 1002, in get_screenshot_as_png
+    return b64decode(self.get_screenshot_as_base64().encode("ascii"))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\selenium\webdriver\remote\webdriver.py", line 1012, in get_screenshot_as_base64
+    return self.execute(Command.SCREENSHOT)["value"]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\selenium\webdriver\remote\webdriver.py", line 506, in execute
+    self.error_handler.check_response(response)
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\appium\webdriver\errorhandler.py", line 126, in check_response
+    raise exception_class(msg=message, stacktrace=format_stacktrace(stacktrace))
+selenium.common.exceptions.InvalidSessionIdException: Message: A session is either terminated or not started; For documentation on this error, please visit: https://www.selenium.dev/documentation/webdriver/troubleshooting/errors#invalidsessionidexception
+Stacktrace:
+NoSuchDriverError: A session is either terminated or not started
+    at asyncHandler (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\@appium\base-driver\lib\protocol\protocol.js:311:15)
+    at C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\@appium\base-driver\lib\protocol\protocol.js:514:15
+    at Layer.handle [as handle_request] (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\express\lib\router\layer.js:95:5)
+    at next (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\express\lib\router\route.js:149:13)
+    at Route.dispatch (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\express\lib\router\route.js:119:3)
+    at Layer.handle [as handle_request] (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\express\lib\router\layer.js:95:5)
+    at C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\express\lib\router\index.js:284:15
+    at param (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\express\lib\router\index.js:365:14)
+    at param (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\express\lib\router\index.js:376:14)
+    at router.process_params (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\express\lib\router\index.js:421:3)
+    at next (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\express\lib\router\index.js:280:10)
+    at logger (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\morgan\index.js:144:5)
+    at Layer.handle [as handle_request] (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\express\lib\router\layer.js:95:5)
+    at trim_prefix (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\express\lib\router\index.js:328:13)
+    at C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\express\lib\router\index.js:286:9
+    at router.process_params (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\express\lib\router\index.js:346:12)
+    at next (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\express\lib\router\index.js:280:10)
+    at jsonParser (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\body-parser\lib\types\json.js:113:7)
+    at Layer.handle [as handle_request] (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\express\lib\router\layer.js:95:5)
+    at trim_prefix (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\express\lib\router\index.js:328:13)
+    at C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\express\lib\router\index.js:286:9
+    at router.process_params (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\express\lib\router\index.js:346:12)
+
+Traceback (most recent call last):
+  File "C:\affiliate-bot\affiliate-bot\main.py", line 63, in run
+    video = create_and_download(d, p, shot_remote)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\affiliate-bot\affiliate-bot\main.py", line 25, in create_and_download
+    phone.open_app(d, PKG["youtube"])
+  File "C:\affiliate-bot\affiliate-bot\phone.py", line 28, in open_app
+    d.activate_app(pkg)
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\appium\webdriver\extensions\applications.py", line 147, in activate_app
+    self.execute_script(
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\selenium\webdriver\remote\webdriver.py", line 617, in execute_script
+    return self.execute(command, {"script": script, "args": converted_args})["value"]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\selenium\webdriver\remote\webdriver.py", line 506, in execute
+    self.error_handler.check_response(response)
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\appium\webdriver\errorhandler.py", line 126, in check_response
+    raise exception_class(msg=message, stacktrace=format_stacktrace(stacktrace))
+selenium.common.exceptions.WebDriverException: Message: An unknown server-side error occurred while processing the command. Original error: Unable to resolve the launchable activity of 'com.google.android.youtube'. Original error: priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true
+com.google.android.youtube/.app.honeycomb.Shell$HomeActivity
+Stacktrace:
+UnknownError: An unknown server-side error occurred while processing the command. Original error: Unable to resolve the launchable activity of 'com.google.android.youtube'. Original error: priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true
+com.google.android.youtube/.app.honeycomb.Shell$HomeActivity
+    at getResponseForW3CError (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\@appium\base-driver\lib\protocol\errors.js:1143:9)
+    at asyncHandler (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\@appium\base-driver\lib\protocol\protocol.js:487:57)
+
+Traceback (most recent call last):
+  File "C:\affiliate-bot\affiliate-bot\main.py", line 63, in run
+    video = create_and_download(d, p, shot_remote)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\affiliate-bot\affiliate-bot\main.py", line 25, in create_and_download
+    phone.open_app(d, PKG["youtube"])
+  File "C:\affiliate-bot\affiliate-bot\phone.py", line 28, in open_app
+    d.activate_app(pkg)
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\appium\webdriver\extensions\applications.py", line 147, in activate_app
+    self.execute_script(
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\selenium\webdriver\remote\webdriver.py", line 617, in execute_script
+    return self.execute(command, {"script": script, "args": converted_args})["value"]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\selenium\webdriver\remote\webdriver.py", line 506, in execute
+    self.error_handler.check_response(response)
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\appium\webdriver\errorhandler.py", line 126, in check_response
+    raise exception_class(msg=message, stacktrace=format_stacktrace(stacktrace))
+selenium.common.exceptions.WebDriverException: Message: An unknown server-side error occurred while processing the command. Original error: Unable to resolve the launchable activity of 'com.google.android.youtube'. Original error: priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true
+com.google.android.youtube/.app.honeycomb.Shell$HomeActivity
+Stacktrace:
+UnknownError: An unknown server-side error occurred while processing the command. Original error: Unable to resolve the launchable activity of 'com.google.android.youtube'. Original error: priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true
+com.google.android.youtube/.app.honeycomb.Shell$HomeActivity
+    at getResponseForW3CError (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\@appium\base-driver\lib\protocol\errors.js:1143:9)
+    at asyncHandler (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\@appium\base-driver\lib\protocol\protocol.js:487:57)
+
+Traceback (most recent call last):
+  File "C:\affiliate-bot\affiliate-bot\main.py", line 63, in run
+    video = create_and_download(d, p, shot_remote)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\affiliate-bot\affiliate-bot\main.py", line 25, in create_and_download
+    phone.open_app(d, PKG["youtube"])
+  File "C:\affiliate-bot\affiliate-bot\phone.py", line 28, in open_app
+    d.activate_app(pkg)
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\appium\webdriver\extensions\applications.py", line 147, in activate_app
+    self.execute_script(
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\selenium\webdriver\remote\webdriver.py", line 617, in execute_script
+    return self.execute(command, {"script": script, "args": converted_args})["value"]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\selenium\webdriver\remote\webdriver.py", line 506, in execute
+    self.error_handler.check_response(response)
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\appium\webdriver\errorhandler.py", line 126, in check_response
+    raise exception_class(msg=message, stacktrace=format_stacktrace(stacktrace))
+selenium.common.exceptions.WebDriverException: Message: An unknown server-side error occurred while processing the command. Original error: Unable to resolve the launchable activity of 'com.google.android.youtube'. Original error: priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true
+com.google.android.youtube/.app.honeycomb.Shell$HomeActivity
+Stacktrace:
+UnknownError: An unknown server-side error occurred while processing the command. Original error: Unable to resolve the launchable activity of 'com.google.android.youtube'. Original error: priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true
+com.google.android.youtube/.app.honeycomb.Shell$HomeActivity
+    at getResponseForW3CError (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\@appium\base-driver\lib\protocol\errors.js:1143:9)
+    at asyncHandler (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\@appium\base-driver\lib\protocol\protocol.js:487:57)
+
+Traceback (most recent call last):
+  File "C:\affiliate-bot\affiliate-bot\main.py", line 63, in run
+    video = create_and_download(d, p, shot_remote)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\affiliate-bot\affiliate-bot\main.py", line 25, in create_and_download
+    phone.open_app(d, PKG["youtube"])
+  File "C:\affiliate-bot\affiliate-bot\phone.py", line 28, in open_app
+    d.activate_app(pkg)
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\appium\webdriver\extensions\applications.py", line 147, in activate_app
+    self.execute_script(
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\selenium\webdriver\remote\webdriver.py", line 617, in execute_script
+    return self.execute(command, {"script": script, "args": converted_args})["value"]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\selenium\webdriver\remote\webdriver.py", line 506, in execute
+    self.error_handler.check_response(response)
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\appium\webdriver\errorhandler.py", line 126, in check_response
+    raise exception_class(msg=message, stacktrace=format_stacktrace(stacktrace))
+selenium.common.exceptions.WebDriverException: Message: An unknown server-side error occurred while processing the command. Original error: Unable to resolve the launchable activity of 'com.google.android.youtube'. Original error: priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true
+com.google.android.youtube/.app.honeycomb.Shell$HomeActivity
+Stacktrace:
+UnknownError: An unknown server-side error occurred while processing the command. Original error: Unable to resolve the launchable activity of 'com.google.android.youtube'. Original error: priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true
+com.google.android.youtube/.app.honeycomb.Shell$HomeActivity
+    at getResponseForW3CError (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\@appium\base-driver\lib\protocol\errors.js:1143:9)
+    at asyncHandler (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\@appium\base-driver\lib\protocol\protocol.js:487:57)
+
+Traceback (most recent call last):
+  File "C:\affiliate-bot\affiliate-bot\main.py", line 63, in run
+    video = create_and_download(d, p, shot_remote)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\affiliate-bot\affiliate-bot\main.py", line 25, in create_and_download
+    phone.open_app(d, PKG["youtube"])
+  File "C:\affiliate-bot\affiliate-bot\phone.py", line 28, in open_app
+    d.activate_app(pkg)
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\appium\webdriver\extensions\applications.py", line 147, in activate_app
+    self.execute_script(
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\selenium\webdriver\remote\webdriver.py", line 617, in execute_script
+    return self.execute(command, {"script": script, "args": converted_args})["value"]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\selenium\webdriver\remote\webdriver.py", line 506, in execute
+    self.error_handler.check_response(response)
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\appium\webdriver\errorhandler.py", line 126, in check_response
+    raise exception_class(msg=message, stacktrace=format_stacktrace(stacktrace))
+selenium.common.exceptions.WebDriverException: Message: An unknown server-side error occurred while processing the command. Original error: Unable to resolve the launchable activity of 'com.google.android.youtube'. Original error: priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true
+com.google.android.youtube/.app.honeycomb.Shell$HomeActivity
+Stacktrace:
+UnknownError: An unknown server-side error occurred while processing the command. Original error: Unable to resolve the launchable activity of 'com.google.android.youtube'. Original error: priority=0 preferredOrder=0 match=0x108000 specificIndex=-1 isDefault=true
+com.google.android.youtube/.app.honeycomb.Shell$HomeActivity
+    at getResponseForW3CError (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\@appium\base-driver\lib\protocol\errors.js:1143:9)
+    at asyncHandler (C:\Users\Jatin\AppData\Roaming\npm\node_modules\appium\node_modules\@appium\base-driver\lib\protocol\protocol.js:487:57)
+
+Traceback (most recent call last):
+  File "C:\affiliate-bot\affiliate-bot\main.py", line 63, in run
+    video = create_and_download(d, p, shot_remote)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\affiliate-bot\affiliate-bot\main.py", line 27, in create_and_download
+    step("youtube create", agent.run_task(d,
+  File "C:\affiliate-bot\affiliate-bot\main.py", line 22, in step
+    raise RuntimeError(f"{name} failed: {why}")
+RuntimeError: youtube create failed: AI keeps failing: All AI providers are resting (limit reached). Try again later.
+
+Traceback (most recent call last):
+  File "C:\affiliate-bot\affiliate-bot\main.py", line 53, in run
+    p, png = find_product.find_affiliate_product(d)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\affiliate-bot\affiliate-bot\find_product.py", line 115, in find_affiliate_product
+    raise RuntimeError("could not find a cute product with commission above 2% after several tries")
+RuntimeError: could not find a cute product with commission above 2% after several tries
+
+Traceback (most recent call last):
+  File "C:\affiliate-bot\affiliate-bot\main.py", line 53, in run
+    p, png = find_product.find_affiliate_product(d)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\affiliate-bot\affiliate-bot\find_product.py", line 98, in find_affiliate_product
+    ok, why = agent.run_task(d, goal, max_steps=45)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\affiliate-bot\affiliate-bot\agent.py", line 329, in run_task
+    ok, why = _run(d, goal, max_steps, key, list(texts or []), notes, trace)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\affiliate-bot\affiliate-bot\agent.py", line 237, in _run
+    phone.swipe(d, a["direction"])
+  File "C:\affiliate-bot\affiliate-bot\phone.py", line 47, in swipe
+    d.execute_script("mobile: swipeGesture", {
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\selenium\webdriver\remote\webdriver.py", line 617, in execute_script
+    return self.execute(command, {"script": script, "args": converted_args})["value"]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\selenium\webdriver\remote\webdriver.py", line 506, in execute
+    self.error_handler.check_response(response)
+  File "C:\Users\Jatin\AppData\Local\Programs\Python\Python312\Lib\site-packages\appium\webdriver\errorhandler.py", line 126, in check_response
+    raise exception_class(msg=message, stacktrace=format_stacktrace(stacktrace))
+selenium.common.exceptions.InvalidArgumentException: Message: java.lang.IllegalArgumentException: Swipe direction must be one of [LEFT, RIGHT, UP, DOWN]
+Stacktrace:
+io.appium.uiautomator2.common.exceptions.InvalidArgumentException: java.lang.IllegalArgumentException: Swipe direction must be one of [LEFT, RIGHT, UP, DOWN]
+	at io.appium.uiautomator2.handler.request.SafeRequestHandler.handle(SafeRequestHandler.java:65)
+	at io.appium.uiautomator2.server.AppiumServlet.handleRequest(AppiumServlet.java:267)
+	at io.appium.uiautomator2.server.AppiumServlet.handleHttpRequest(AppiumServlet.java:261)
+	at io.appium.uiautomator2.http.ServerHandler.channelRead(ServerHandler.java:68)
+	at io.netty.channel.AbstractChannelHandlerContext.invokeChannelRead(AbstractChannelHandlerContext.java:366)
+	at io.netty.channel.AbstractChannelHandlerContext.invokeChannelRead(AbstractChannelHandlerContext.java:352)
+	at io.netty.channel.AbstractChannelHandlerContext.fireChannelRead(AbstractChannelHandlerContext.java:345)
+	at io.netty.handler.codec.MessageToMessageDecoder.channelRead(MessageToMessageDecoder.java:102)
+	at io.netty.channel.AbstractChannelHandlerContext.invokeChannelRead(AbstractChannelHandlerContext.java:366)
+	at io.netty.channel.AbstractChannelHandlerContext.invokeChannelRead(AbstractChannelHandlerContext.java:352)
+	at io.netty.channel.AbstractChannelHandlerContext.fireChannelRead(AbstractChannelHandlerContext.java:345)
+	at io.netty.channel.CombinedChannelDuplexHandler$DelegatingChannelHandlerContext.fireChannelRead(CombinedChannelDuplexHandler.java:435)
+	at io.netty.handler.codec.ByteToMessageDecoder.fireChannelRead(ByteToMessageDecoder.java:293)
+	at io.netty.handler.codec.ByteToMessageDecoder.channelRead(ByteToMessageDecoder.java:267)
+	at io.netty.channel.CombinedChannelDuplexHandler.channelRead(CombinedChannelDuplexHandler.java:250)
+	at io.netty.channel.AbstractChannelHandlerContext.invokeChannelRead(AbstractChannelHandlerContext.java:366)
+	at io.netty.channel.AbstractChannelHandlerContext.invokeChannelRead(AbstractChannelHandlerContext.java:352)
+	at io.netty.channel.AbstractChannelHandlerContext.fireChannelRead(AbstractChannelHandlerContext.java:345)
+	at io.netty.handler.timeout.IdleStateHandler.channelRead(IdleStateHandler.java:266)
+	at io.netty.channel.AbstractChannelHandlerContext.invokeChannelRead(AbstractChannelHandlerContext.java:366)
+	at io.netty.channel.AbstractChannelHandlerContext.invokeChannelRead(AbstractChannelHandlerContext.java:352)
+	at io.netty.channel.AbstractChannelHandlerContext.fireChannelRead(AbstractChannelHandlerContext.java:345)
+	at io.netty.channel.DefaultChannelPipeline$HeadContext.channelRead(DefaultChannelPipeline.java:1294)
+	at io.netty.channel.AbstractChannelHandlerContext.invokeChannelRead(AbstractChannelHandlerContext.java:366)
+	at io.netty.channel.AbstractChannelHandlerContext.invokeChannelRead(AbstractChannelHandlerContext.java:352)
+	at io.netty.channel.DefaultChannelPipeline.fireChannelRead(DefaultChannelPipeline.java:911)
+	at io.netty.channel.nio.AbstractNioByteChannel$NioByteUnsafe.read(AbstractNioByteChannel.java:131)
+	at io.netty.channel.nio.NioEventLoop.processSelectedKey(NioEventLoop.java:611)
+	at io.netty.channel.nio.NioEventLoop.processSelectedKeysOptimized(NioEventLoop.java:552)
+	at io.netty.channel.nio.NioEventLoop.processSelectedKeys(NioEventLoop.java:466)
+	at io.netty.channel.nio.NioEventLoop.run(NioEventLoop.java:438)
+	at io.netty.util.concurrent.SingleThreadEventExecutor$2.run(SingleThreadEventExecutor.java:140)
+	at io.netty.util.concurrent.DefaultThreadFactory$DefaultRunnableDecorator.run(DefaultThreadFactory.java:144)
+	at java.lang.Thread.run(Thread.java:1571)
+Caused by: java.lang.IllegalArgumentException: Swipe direction must be one of [LEFT, RIGHT, UP, DOWN]
+	at io.appium.uiautomator2.model.api.gestures.SwipeModel.getDirection(SwipeModel.java:41)
+	at io.appium.uiautomator2.handler.gestures.Swipe.safeHandle(Swipe.java:46)
+	at io.appium.uiautomator2.handler.request.SafeRequestHandler.handle(SafeRequestHandler.java:59)
+	... 33 more
+
+

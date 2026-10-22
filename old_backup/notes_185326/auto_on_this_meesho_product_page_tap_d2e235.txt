@@ -1,0 +1,4 @@
+Do not persist with tapping UI elements after being redirected by an authentication gate; secure login first
+The 'My Profile' screen is the destination for unauthenticated attempts to access user-specific features like Wishlist
+To successfully add to wishlist on Meesho, the account must be logged in before interacting with the heart icon
+Visual feedback like a 'filled heart' will not appear if the action is intercepted by a login prompt

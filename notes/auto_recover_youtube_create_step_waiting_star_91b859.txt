@@ -1,0 +1,3 @@
+Tap 'Continue' to clear any consent, terms, or privacy notices blocking the screen.
+Tap 'Generate video' to initiate the video creation process.
+Wait until the 'Video generation' screen is fully visible and unobstructed.

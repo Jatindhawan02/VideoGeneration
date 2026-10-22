@@ -1,0 +1,6 @@
+Tapping the 'Generate video' button opens the AI prompt input screen.
+Use the Exit button to clear blocking dialog boxes and resume navigation.
+Close the video preview to return to previous navigation layers.
+Accepting consent or privacy notices is often required to reach creation tools.
+The 'Video generation' screen is identified by the presence of a prompt text box.
+Dismissing dialogs or previews is a standard path to reach the main action buttons.

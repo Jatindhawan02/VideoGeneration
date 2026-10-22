@@ -1,0 +1,117 @@
+[
+ {
+  "action": "wait",
+  "seconds": 5
+ },
+ {
+  "action": "wait",
+  "seconds": 5
+ },
+ {
+  "action": "tap",
+  "x": 500,
+  "y": 460,
+  "loc": null
+ },
+ {
+  "action": "type",
+  "slot": 0
+ },
+ {
+  "action": "wait",
+  "seconds": 5
+ },
+ {
+  "action": "tap",
+  "x": 499,
+  "y": 869,
+  "loc": null
+ },
+ {
+  "action": "tap",
+  "x": 86,
+  "y": 511,
+  "loc": {
+   "desc": "Add media"
+  }
+ },
+ {
+  "action": "wait",
+  "seconds": 5
+ },
+ {
+  "action": "tap",
+  "x": 86,
+  "y": 194,
+  "loc": {
+   "id": "mediaThumbnail-0",
+   "desc": "Image"
+  }
+ },
+ {
+  "action": "tap",
+  "x": 124,
+  "y": 193,
+  "loc": {
+   "id": "mediaThumbnail-0",
+   "desc": "Image selected"
+  }
+ },
+ {
+  "action": "wait",
+  "seconds": 5
+ },
+ {
+  "action": "tap",
+  "x": 180,
+  "y": 245,
+  "loc": {
+   "id": "mediaThumbnail-0",
+   "desc": "Image"
+  }
+ },
+ {
+  "action": "tap",
+  "x": 223,
+  "y": 825,
+  "loc": {
+   "id": "mediaThumbnail-12",
+   "desc": "Image"
+  }
+ },
+ {
+  "action": "tap",
+  "x": 234,
+  "y": 187,
+  "loc": {
+   "id": "mediaThumbnail-0",
+   "desc": "Image selected"
+  }
+ },
+ {
+  "action": "tap",
+  "x": 125,
+  "y": 215,
+  "loc": {
+   "id": "mediaThumbnail-0",
+   "desc": "Image selected"
+  }
+ },
+ {
+  "action": "tap",
+  "x": 223,
+  "y": 825,
+  "loc": {
+   "id": "mediaThumbnail-12",
+   "desc": "Image"
+  }
+ },
+ {
+  "action": "wait",
+  "seconds": 5
+ },
+ {
+  "action": "type",
+  "slot": 0
+ }
+]

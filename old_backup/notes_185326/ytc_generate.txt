@@ -1,0 +1,8 @@
+'Generate video' is a small icon button in the row of 5 icons under the big 'Edit with AI' banner: Create project, Edit with AI, Generate video, Generate image, Use template.
+Never tap the bottom bar (Home, Explore, +, Projects, You) and never tap 'Edit with AI'.
+After 'Generate video', wait 5 seconds; if the prompt box is not visible, explore (tap Create/Continue/Next, or swipe up) before giving up.
+Always tap the prompt text box first to focus it, then type the entire required prompt in one single type action.
+After typing the prompt, tap the 'Generate' button immediately to start the process; wait for processing before any other action.
+Do not add a reference image from the gallery unless explicitly instructed; the prompt text alone triggers the video generation.
+Mistake to avoid: Do not tap the '+' icon to open the gallery when the goal is to type a prompt and hit Generate; this leads to unnecessary navigation.
+Do not reply fail just because a field is not visible yet; wait for the screen to initialize fully.

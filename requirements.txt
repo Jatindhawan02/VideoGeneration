@@ -1,0 +1,5 @@
+Appium-Python-Client>=3.0
+google-genai
+python-dotenv
+requests
+pillow

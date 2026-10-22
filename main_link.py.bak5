@@ -1,0 +1,339 @@
+"""Link -> video + caption. Does NOT post anything. main.py is untouched.
+Use: python main_link.py "PRODUCT_LINK"
+"""
+import io, os, re, sys, json, time
+import phone, agent, llm, find_product, yt_flow, script_writer, verify_video, supervisor, strict_checks
+from PIL import Image
+from google.genai import types
+from config import PKG, SHORT_PROMPT_STYLE
+
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
+BASE = os.path.dirname(os.path.abspath(__file__))
+OUT_ROOT = os.path.join(BASE, "outputs_test")
+LOGS = os.path.join(BASE, "logs")
+STYLE = (SHORT_PROMPT_STYLE or "").strip().strip('"').strip("'")
+if STYLE.upper().startswith("SHORT_PROMPT_STYLE="):      # .env/config line was read with its name included
+    STYLE = STYLE.split("=", 1)[1].strip()
+
+YT_PKG = os.getenv("YTCREATE_PKG", "com.google.android.apps.youtube.producer")   # YouTube Create app
+VID_FOLDERS = ["/sdcard/Movies", "/sdcard/DCIM/Camera", "/sdcard/Download", "/sdcard/DCIM", "/sdcard/Pictures"]
+
+
+def step(name, res):
+    ok, why = res
+    print("[" + ("OK" if ok else "FAIL") + "] " + name + ": " + str(why))
+    if not ok:
+        raise RuntimeError(name + " failed: " + str(why))
+
+
+def clean_desc(t):
+    t = re.sub(r"(?:\u00c2)?[\u20b9\u00a5]\s?\d[\d,]*|Rs\.?\s?\d[\d,]*", "", t or "")
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def open_link(d, url):
+    for params in ({"url": url, "package": PKG["meesho"]}, {"url": url}):
+        try:
+            d.execute_script("mobile: deepLink", params)
+            return True
+        except Exception as e:
+            print("  deepLink try failed:", str(e)[:100])
+    return False
+
+
+def screen_texts(d):
+    """All visible text on the current screen (free, from Appium, no AI)."""
+    out = []
+    try:
+        for n in agent._ui_nodes(d):
+            for v in (n.get("text"), n.get("desc")):
+                v = (v or "").strip()
+                if len(v) > 2:
+                    out.append(v)
+    except Exception:
+        pass
+    return out
+
+
+def _sig(png):
+    """Tiny grayscale fingerprint of the image-carousel area (to tell if the picture changed)."""
+    im = Image.open(io.BytesIO(png)).convert("L")
+    w, h = im.size
+    return list(im.crop((0, int(.08 * h), w, int(.55 * h))).resize((24, 24)).getdata())
+
+
+def _same(a, b):
+    return sum(abs(x - y) for x, y in zip(a, b)) / len(a) < 4
+
+
+def _swipe(d, x1, y1, x2, y2):
+    phone.adb("shell", "input swipe %d %d %d %d 350" % (x1, y1, x2, y2))
+
+
+def capture_pages(d, out_dir, max_images=6, info_pages=2):
+    """1) swipe LEFT on the image carousel and screenshot each product picture,
+       2) then scroll DOWN a little to screenshot the product info.
+       Returns (carousel_shots, info_shots, texts); shots are (path, png)."""
+    W, H = agent._screen(d)
+    carousel, info, texts, prev = [], [], [], None
+    for i in range(max_images):
+        png = phone.screenshot(d)
+        sig = _sig(png)
+        if prev is not None and _same(sig, prev):       # swipe did nothing: last picture reached
+            break
+        prev = sig
+        path = os.path.join(out_dir, "product.png" if i == 0 else "image_%d.png" % (i + 1))
+        with open(path, "wb") as f:
+            f.write(png)
+        carousel.append((path, png))
+        texts += screen_texts(d)
+        _swipe(d, int(.85 * W), int(.28 * H), int(.15 * W), int(.28 * H))     # next picture
+        time.sleep(1.5)
+    for j in range(info_pages):
+        _swipe(d, int(.5 * W), int(.80 * H), int(.5 * W), int(.30 * H))       # scroll down to the info
+        time.sleep(2)
+        png = phone.screenshot(d)
+        path = os.path.join(out_dir, "info_%d.png" % (j + 1))
+        with open(path, "wb") as f:
+            f.write(png)
+        info.append((path, png))
+        texts += screen_texts(d)
+    print("  %d product photos + %d info screenshots liye" % (len(carousel), len(info)))
+    return carousel, info, texts
+
+
+def get_product(shots, texts):
+    """AI reads the product name + description from all screenshots and the on-screen text. No questions asked."""
+    name, desc = "", ""
+    seen, hint = set(), []
+    for t in texts:
+        t = clean_desc(t)
+        if t and t not in seen:
+            seen.add(t)
+            hint.append(t)
+    hint_text = " | ".join(hint)[:2500]
+    prompt = (
+        "These are screenshots of one product page in the Meesho shopping app (product photos and the info section below them).\n"
+        "Text that was found on the screens (may include buttons and noise): " + hint_text + "\n\n"
+        "Find the product. Return JSON: {\"name\": \"short product name, 3-8 words, no price\", "
+        "\"description\": \"1-2 short sentences with the real features (material, size, use, what is in the box) "
+        "that are visible. No price, discount, rating or delivery info. Do not invent anything.\"}"
+    )
+
+    def validate(text):
+        try:
+            data = json.loads(text)
+            if not isinstance(data, dict) or not str(data.get("name", "")).strip():
+                return "no product name in answer"
+        except Exception:
+            return "not valid JSON"
+        return None
+
+    try:
+        imgs = [types.Part.from_bytes(data=agent.shrink(png, 720), mime_type="image/jpeg") for _, png in shots[:4]]
+        info = json.loads(llm.generate(imgs + [prompt], validate=validate))
+        name = str(info.get("name", "")).strip()
+        desc = clean_desc(info.get("description", ""))
+    except Exception as e:
+        print("  AI product page nahi padh paya:", str(e)[:120])
+    print("\nProduct page se mila:")
+    print("  Naam       :", name or "(nahi mila)")
+    print("  Description:", desc or "(nahi mila)")
+    if not name:        # only ask when the AI could not find it at all
+        name = input("Naam nahi mila. Product ka naam type karo: ").strip()
+    if not name:
+        raise RuntimeError("Product ka naam nahi mila. Dobara chalao.")
+    return {"name": name, "description": desc}
+
+
+def list_mp4():
+    pattern = " ".join(f + "/*.mp4" for f in VID_FOLDERS)
+    out = phone.adb("shell", "ls -t " + pattern + " 2>/dev/null")
+    return [l.strip() for l in out.splitlines() if l.strip().startswith("/")]
+
+
+def create_video(d, p, shot_remote, prompt=None):
+    """YouTube Create via yt_flow (fixed, verified UI steps, no AI). Returns the mp4 path on the phone.
+    prompt = the researched script prompt from script_writer (falls back to the old plain prompt)."""
+    if not prompt:
+        prompt = STYLE + " Product: " + p["name"] + ". Details: " + p["description"]
+    return yt_flow.run(d, prompt)
+
+
+def write_post(out_dir, url, p, script=None, report=None):
+    prompt = (
+        "You write Instagram Reel captions for an Indian affiliate creator.\n"
+        "Product: " + p["name"] + "\n"
+        "Details from the page: " + (p["description"] or "none") + "\n"
+        "Use ONLY these facts. Do not invent discounts, ratings, materials, sizes or claims.\n"
+        "Rules: simple Hinglish (Hindi in English letters), cute friendly tone, catchy first line, 2-3 short lines, "
+        "no price, no words like 'guaranteed' or 'best', at most 3 emojis.\n"
+        "Just before the last line add: (Affiliate link - I may earn a commission)\n"
+        "The caption must END with the exact line: Comment LINK to get the link in your DM\n"
+        "Return JSON: {\"caption\": \"...\", \"hashtags\": [\"#...\"]} with 6 to 8 hashtags including #ad"
+    )
+    caption, tags = "", ""
+    try:
+        data = json.loads(llm.generate([prompt]))
+        caption = str(data.get("caption", "")).strip()
+        h = data.get("hashtags", [])
+        tags = " ".join(h) if isinstance(h, list) else str(h)
+    except Exception as e:
+        print("  caption nahi bana:", str(e)[:150])
+        caption = "(Caption nahi bana. Thodi der baad dobara try karo.)"
+    text = ("PRODUCT: " + p["name"] + "\nLINK: " + url + "\n\nCAPTION:\n" + caption + "\n\nHASHTAGS:\n" + tags + "\n")
+    if script:
+        text += "\nVOICEOVER SCRIPT:\n" + script["voiceover"] + "\n"
+    if report:
+        text += ("\nVIDEO CHECK: " + ("PASS" if report.get("pass") else "FAILED - dekh ke hi post karna") + "\n"
+                 + "Reason: " + str(report.get("reason")) + "\n"
+                 + "What the video says: " + str(report.get("transcript")) + "\n"
+                 + "What the video shows: " + str(report.get("summary")) + "\n")
+    path = os.path.join(out_dir, "post.txt")
+    with open(path, "w", encoding="utf-8-sig") as f:
+        f.write(text)
+    print("\n" + text)
+    return path
+
+
+def main():
+    if len(sys.argv) < 2:
+        print('Use: python main_link.py "PRODUCT_LINK"')
+        return
+    url = sys.argv[1].strip()
+    os.makedirs(LOGS, exist_ok=True)
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    out_dir = os.path.join(OUT_ROOT, stamp)
+    os.makedirs(out_dir, exist_ok=True)
+    d = None
+    try:
+        print("1/5 Phone connect ho raha hai...")
+        d = phone.connect()
+        print("2/5 Link phone pe khol raha hoon...")
+        if not open_link(d, url):
+            raise RuntimeError("Link phone pe nahi khula. Link sahi hai? Meesho app installed hai?")
+        time.sleep(10)
+        print("3/5 Product ki photos (carousel) aur info ke screenshots le raha hoon...")
+        carousel, info, texts = capture_pages(d, out_dir)
+        if not carousel:
+            raise RuntimeError("Product page ka screenshot nahi mila.")
+        shot_local = carousel[0][0]
+        # the picture given to YouTube Create must be the PRODUCT only (not the whole app screen with prices/buttons)
+        try:
+            _im = Image.open(shot_local)
+            _w, _h = _im.size
+            _ref = os.path.join(out_dir, "reference.png")
+            _im.crop((0, int(.08 * _h), _w, int(.55 * _h))).save(_ref)
+            shot_local = _ref
+        except Exception as e:
+            print("  (reference crop skipped:", str(e)[:80], ")")
+        print("   Product ki jaankari nikal raha hoon...")
+        ai_shots = carousel[:1] + info + carousel[1:2]       # main photo, info section, one more photo
+        p = get_product(ai_shots, texts)
+        print("   Product ki research + viral Hinglish script ban rahi hai...")
+        script = script_writer.make_script(p)
+        print("  Voiceover:", script["voiceover"])
+        print("  Voice text (Devanagari):", script.get("voice_hi", ""))
+        print("  Meaning:", script.get("meaning", ""))
+        prompt = script["yt_prompt"]
+        best, report = None, None
+        MAX_TRIES = int(os.getenv("MAX_VIDEO_TRIES", "5"))
+        for attempt in range(1, MAX_TRIES + 1):
+            supervisor.reset()
+            shot_remote = "/sdcard/Pictures/product_shot_%d.png" % int(time.time())   # new name = newest in the picker
+            phone.push_media(shot_local, shot_remote)
+            phone.adb("shell", "touch", shot_remote)
+            time.sleep(2)
+            print("4/5 YouTube Create me video ban raha hai, try %d/%d (kuch minute lag sakte hain)..." % (attempt, MAX_TRIES))
+            try:
+                remote = create_video(d, p, shot_remote, prompt)
+            except supervisor.FlowProblem as fp:        # the watcher saw an error on screen while waiting
+                print("  [watcher] stopped waiting:", fp)
+                prompt = supervisor.fix_prompt(p, script, prompt, fp, attempt)
+                continue
+            except RuntimeError as e:                   # a fixed step failed: ask the AI what the screen shows
+                print("  [flow] step failed:", str(e)[:200])
+                if supervisor.unstick(d, e):            # unexpected dialog/screen: AI clears it, same prompt again
+                    continue
+                fp = supervisor.diagnose_failure(d, e)
+                prompt = supervisor.fix_prompt(p, script, prompt, fp, attempt)
+                continue
+            except Exception as e:                      # e.g. Appium session died: reconnect and try again
+                print("  [flow] unexpected error:", str(e)[:200], "-> reconnecting to the phone")
+                try:
+                    d.quit()
+                except Exception:
+                    pass
+                time.sleep(3)
+                d = phone.connect()
+                continue
+            local = os.path.join(out_dir, "video_try%d.mp4" % attempt)
+            phone.adb("pull", remote, local)
+            if not os.path.exists(local) or os.path.getsize(local) == 0:
+                raise RuntimeError("Video laptop pe copy nahi hua: " + remote)
+            print("  video saved:", local)
+            try:
+                import trim
+                local = trim.trim_reference_end(local, shot_local)   # cut the screenshot added at the end
+            except Exception as e:
+                print("  (trim skipped:", str(e)[:80], ")")
+            print("   Video ke frames aur awaaz check ho rahi hai...")
+            try:
+                report = verify_video.check_video(local, p, script)
+            except Exception as e:
+                report = {"pass": False, "reason": "check could not run: " + str(e)[:150],
+                          "transcript": "", "summary": "", "checks": {}}
+            # The free AI providers cannot hear audio. Do not throw away a good video (and 12 minutes of
+            # generation) only because the audio could not be checked.
+            c, rs = report.get("checks", {}), str(report.get("reason", "")).lower()
+            if (not report["pass"] and "audio" in rs and "not provided" in rs
+                    and c.get("frames_show_product") and c.get("frames_clean") and c.get("no_bad_claims")):
+                report["pass"] = True
+                report["reason"] = "frames OK; audio could NOT be checked by AI - listen to it yourself before posting"
+            # Strict, code-based checks: the words the voice really said vs the script, and the product vs the reference photo
+            try:
+                report = strict_checks.apply(report, local, shot_local, p, script)
+            except Exception as e:
+                print("  (strict checks could not run:", str(e)[:120], ")")
+            print("  check:", report["checks"], "->", report["reason"])
+            print("  said :", report["transcript"])
+            best = local
+            if report["pass"]:
+                break
+            prompt = script_writer.retry_prompt(p, script, report["reason"])
+        if not best:
+            raise RuntimeError("Video %d tries me bhi nahi bana. Logs dekho." % MAX_TRIES)
+        import shutil
+        final = os.path.join(out_dir, "video.mp4")
+        shutil.copyfile(best, final)
+        if not report["pass"]:
+            print("\nWARNING: video 2 baar check me fail hui. Video rakh li hai, par post karne se pehle khud dekh lo.")
+        print("5/5 Caption ban raha hai...")
+        write_post(out_dir, url, p, script, report)
+        print("\nTAIYAAR! Folder:", out_dir)
+        print("Video phone ki gallery mein bhi hai. Dekh lo, sahi lage to post kar do.")
+        try:
+            os.startfile(out_dir)
+        except Exception:
+            pass
+    except Exception as e:
+        print("\nFAILED:", e)
+        try:
+            with open(os.path.join(LOGS, "fail_link_" + stamp + ".png"), "wb") as f:
+                f.write(phone.screenshot(d))
+        except Exception:
+            pass
+        sys.exit(1)
+    finally:
+        try:
+            if d:
+                d.quit()
+        except Exception:
+            pass
+
+
+main()
