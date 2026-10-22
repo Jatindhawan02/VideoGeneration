@@ -4,7 +4,9 @@ Looks at the WHOLE video (8 frames in time order, all in one picture) next to AL
 The old check compared one reference photo with one frame, so a combo video that showed only the earbuds in its first
 frame was judged "different product".
 
-check(video, ref_paths, product) -> (True / False / None, reason). None = could not be checked (not a failure).
+check(video, ref_paths, product, loose=False) -> (True / False / None, reason). None = could not be checked (not a failure).
+loose=True is for animation formats (claymation, cartoon product, sung jingle): the video is deliberately stylised, so the judge
+compares overall shape, main colours and key parts only, and tiny eyes / a mouth / bouncing movement are NOT "an invented feature".
 Needs ffmpeg on PATH (same as verify_video).
 """
 import io, json, tempfile
@@ -12,6 +14,13 @@ from PIL import Image, ImageDraw, ImageFont
 from google.genai import types
 import llm
 import verify_video
+
+LOOSE_RULE = (
+    "SPECIAL CASE: this video is DELIBERATELY a cartoon / claymation / 3D animation of the product. Stylised textures, soft clay or cartoon "
+    "shading, tiny eyes or a mouth, bouncing, wiggling, flipping and sparkles are expected and are NOT an invented feature. "
+    "same_design = true when the animated object has the same overall shape, the same main colours and the same key parts "
+    "as in Part A. fused = true ONLY if separate items are merged into one object or a real part is added or removed (a different "
+    "number of items, a missing or extra major part).\n")
 
 W = 1600   # bigger picture: small details (case, bracelet) stay visible
 
@@ -65,7 +74,7 @@ def _b(v):
     return (v.strip().lower() in ("true", "yes")) if isinstance(v, str) else bool(v)
 
 
-def check(video, ref_paths, product):
+def check(video, ref_paths, product, loose=False):
     try:
         dur = verify_video._duration(video)
         with tempfile.TemporaryDirectory() as tmp:
@@ -91,6 +100,7 @@ def check(video, ref_paths, product):
         "a watch that opens like a case) or gives the product a feature or shape that Part A does not show. "
         "For a single-item product, fused = true only if the video invents such a feature.\n"
         "A person wearing or holding the items is fine.\n"
+        + (LOOSE_RULE if loose else "") +
         "Return JSON only: {\"items\": [{\"name\": \"...\", \"shown\": true, \"same_design\": true, \"separate\": true}], "
         "\"fused\": false, \"reason\": \"one short sentence\"}"
     )

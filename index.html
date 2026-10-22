@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Affiliate Bot</title>
+<style>
+  :root { --bg:#f5f5f7; --card:#fff; --text:#1d1d1f; --muted:#6e6e73; --border:#d2d2d7; --accent:#2563eb; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#111; --card:#1c1c1e; --text:#f2f2f2; --muted:#9a9aa0; --border:#3a3a3c; --accent:#3b82f6; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,Segoe UI,sans-serif; }
+  .wrap { max-width:720px; margin:0 auto; padding:16px; }
+  h1 { font-size:22px; margin:8px 0 16px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px; margin-bottom:16px; }
+  label { display:block; font-size:13px; color:var(--muted); margin:12px 0 4px; }
+  input[type=text], select { width:100%; padding:10px; font-size:16px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--text); }
+  .check { display:flex; align-items:center; gap:8px; margin-top:12px; font-size:15px; }
+  .check input { width:18px; height:18px; }
+  button { width:100%; margin-top:16px; padding:12px; font-size:16px; border:0; border-radius:8px; background:var(--accent); color:#fff; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .row { display:flex; justify-content:space-between; align-items:center; }
+  .badge { font-size:12px; padding:3px 10px; border-radius:99px; background:var(--border); }
+  .badge.running { background:#f59e0b; color:#000; } .badge.done { background:#16a34a; color:#fff; } .badge.error { background:#dc2626; color:#fff; } .badge.stopped { background:#6b7280; color:#fff; }
+  .btns { display:flex; gap:10px; } .btns button { margin-top:16px; flex:1; } button.stop { background:#dc2626; } button.again { background:#16a34a; }
+  pre { margin:12px 0 0; background:#0b0b0c; color:#d4f7d4; padding:12px; border-radius:8px; height:340px; overflow:auto; font-size:12px; white-space:pre-wrap; word-break:break-word; }
+  .err { color:#dc2626; font-size:14px; margin-top:8px; }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+function App() {
+  const [f, setF] = useState({
+    pairLink: '', pairPin: '', connectLink: '', productLink: '',
+    videoType: 'hands', reelFormat: 'auto', customStyle: '', audio: 'auto', cta: false, textOverlay: false, overlayOpts: ['name', 'comment', 'dm'], overlayCustom: '', mode: 'video',
+    connectMode: /Android|iPhone|iPad|Mobi/i.test(navigator.userAgent) ? 'auto' : 'manual',
+  });
+  const [logs, setLogs] = useState([]);
+  const [status, setStatus] = useState('idle');
+  const [error, setError] = useState('');
+  const [prompt, setPrompt] = useState('');
+  const [caption, setCaption] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [copiedCap, setCopiedCap] = useState(false);
+  const cbox = useRef(null);
+  const pbox = useRef(null);
+  const box = useRef(null);
+  const [alogs, setAlogs] = useState([]);
+  const abox = useRef(null);
+  const [styles, setStyles] = useState([]);
+
+  useEffect(() => { fetch('/styles').then(r => r.json()).then(setStyles).catch(() => {}); }, []);
+
+  useEffect(() => {
+    const es = new EventSource('/events');
+    es.onmessage = e => {
+      const d = JSON.parse(e.data);
+      if (d.reset) { setLogs([]); setPrompt(''); setCaption(''); }
+      if (d.params) setF(p => (p.pairLink || p.productLink ? p : { reelFormat: 'auto', customStyle: '', audio: 'auto', overlayOpts: ['name', 'comment', 'dm'], overlayCustom: '', ...d.params, mode: ({ prompt_only: 'prompt', yt_only: 'video', yt_instagram: 'post' })[d.params.mode] || d.params.mode, connectMode: p.connectMode }));   // another device already ran a job: show its inputs
+      if (typeof d.prompt === 'string') setPrompt(d.prompt);
+      if (typeof d.caption === 'string') setCaption(d.caption);
+      if (d.lines) setLogs(d.lines);
+      if (d.appiumLines) setAlogs(d.appiumLines);
+      if (d.appium) setAlogs(l => [...l, d.appium].slice(-2000));
+      if (d.line) setLogs(l => [...l, d.line]);
+      if (d.status) setStatus(d.status);
+    };
+    return () => es.close();
+  }, []);
+
+  useEffect(() => { if (box.current) box.current.scrollTop = box.current.scrollHeight; }, [logs]);
+  useEffect(() => { if (abox.current) abox.current.scrollTop = abox.current.scrollHeight; }, [alogs]);
+
+  const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+  // texts that can be shown on the video (max 3, shown in this order: about the product first, call to action last)
+  const OVERLAY_GROUPS = [
+    { title: 'About the product', items: [['name', 'Product name (short)'], ['cute', 'Cute caption made from the product'], ['hook', 'Hook text (e.g. \u201cWait for it\u201d)'], ['feature', 'One real feature (from the product page)']] },
+    { title: 'Call to action', items: [['comment', 'Comment LINK'], ['dm', 'Link in your DM'], ['follow', 'Follow for more'], ['bio', 'Shop link in bio']] },
+    { title: 'Your own', items: [['custom', 'My own text']] },
+  ];
+  const OVERLAY_MAX = 3;
+  const toggleOv = id => setF(p => {
+    const has = p.overlayOpts.includes(id);
+    if (!has && p.overlayOpts.length >= OVERLAY_MAX) return p;
+    return { ...p, overlayOpts: has ? p.overlayOpts.filter(x => x !== id) : [...p.overlayOpts, id] };
+  });
+  const trimmed = k => e => set(k, e.target.value.trim());
+
+  async function submit(restart) {
+    setError('');
+    const r = await fetch('/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...f, restart: !!restart }) });
+    if (!r.ok) setError(await r.text());
+  }
+  async function clearLogs() { setLogs([]); try { await fetch('/clear', { method: 'POST' }); } catch (e) {} }
+  async function clearAppium() { setAlogs([]); try { await fetch('/clear-appium', { method: 'POST' }); } catch (e) {} }
+  async function stop() { setError(''); await fetch('/stop', { method: 'POST' }); }
+
+  function copyBox(ref, text, setFlag) {
+    const t = ref.current; if (!t) return;
+    t.focus(); t.select(); t.setSelectionRange(0, 99999);
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) {}
+    if (!ok && navigator.clipboard) navigator.clipboard.writeText(text).then(() => ok = true).catch(() => {});
+    setFlag(true); setTimeout(() => setFlag(false), 1500);
+  }
+  const copyPrompt = () => copyBox(pbox, prompt, setCopied);
+  const copyCaption = () => copyBox(cbox, caption, setCopiedCap);
+
+  // styles that fit the chosen video type (and the voice choice), straight from reel_styles.py
+  const options = styles.filter(s => s.types.includes(f.videoType) && (f.audio === 'auto' || s.audible === (f.audio === 'voice')));
+  const chosen = options.find(s => s.id === f.reelFormat);
+  const noVoice = f.audio === 'none' || (chosen && !chosen.audible);
+  useEffect(() => { if (f.reelFormat !== 'auto' && f.reelFormat !== 'custom' && !chosen) set('reelFormat', 'auto'); }, [f.videoType, f.audio, styles]);
+  useEffect(() => { if (noVoice && f.cta) set('cta', false); }, [noVoice]);
+
+  const running = status === 'running';
+  return (
+    <div className="wrap">
+      <h1>Affiliate Bot</h1>
+      <div className="card">
+        <label style={{marginTop:0}}>How to connect to the phone</label>
+        <label className="check"><input type="radio" name="cm" checked={f.connectMode === 'auto'} onChange={() => set('connectMode', 'auto')} /> Auto connect (open this page on the phone)</label>
+        <label className="check"><input type="radio" name="cm" checked={f.connectMode === 'manual'} onChange={() => set('connectMode', 'manual')} /> Manual (enter ADB details, e.g. from the PC)</label>
+        {f.connectMode === 'auto' ? (
+          <>
+            <div style={{fontSize:13,color:'var(--muted)',marginTop:10}}>Your phone is found automatically. Wireless debugging must be ON and the phone on the same WiFi as the PC.</div>
+            <label>ADB pair PIN — only needed the first time</label>
+            <input type="text" inputMode="numeric" value={f.pairPin} onChange={trimmed('pairPin')} placeholder="123456" />
+          </>
+        ) : (
+          <>
+            <label>ADB pair link (ip:port) — only for first-time pairing</label>
+            <input type="text" value={f.pairLink} onChange={trimmed('pairLink')} placeholder="192.168.1.5:37123" />
+            <label>ADB pair PIN — only for first-time pairing</label>
+            <input type="text" inputMode="numeric" value={f.pairPin} onChange={trimmed('pairPin')} placeholder="123456" />
+            <label>ADB connect link (ip:port)</label>
+            <input type="text" value={f.connectLink} onChange={trimmed('connectLink')} placeholder="192.168.1.5:41234" />
+          </>
+        )}
+        <label>Product link</label>
+        <input type="text" value={f.productLink} onChange={trimmed('productLink')} placeholder="https://..." />
+        <label>Video type</label>
+        <select value={f.videoType} onChange={e => set('videoType', e.target.value)}>
+          <option value="hands">Hands</option>
+          <option value="person">Person</option>
+          <option value="pet">Pet</option>
+          <option value="animated">Animated</option>
+        </select>
+        <label>Voice in the video</label>
+        <label className="check" style={{marginTop:4}}><input type="radio" name="au" checked={f.audio === 'auto'} onChange={() => set('audio', 'auto')} /> Auto (random)</label>
+        <label className="check" style={{marginTop:4}}><input type="radio" name="au" checked={f.audio === 'voice'} onChange={() => set('audio', 'voice')} /> Voice on: someone talks, narrates or sings</label>
+        <label className="check" style={{marginTop:4}}><input type="radio" name="au" checked={f.audio === 'none'} onChange={() => set('audio', 'none')} /> Voice off: only music or natural sounds</label>
+        <label>Video style</label>
+        <select value={f.reelFormat} onChange={e => set('reelFormat', e.target.value)}>
+          <option value="auto">Auto (a different style every time)</option>
+          <option value="custom">{'\u270D '}Write my own style…</option>
+          {options.map(s => <option key={s.id} value={s.id}>{(s.audible ? '\u{1F5E3} ' : '\u{1F507} ') + s.label}</option>)}
+        </select>
+        {f.reelFormat === 'custom' && (
+          <>
+            <label>Describe your style (the AI follows this first)</label>
+            <textarea value={f.customStyle} maxLength={300} onChange={e => set('customStyle', e.target.value)}
+              placeholder="e.g. cosy bedroom reel, college girl shows it as a cute desk gadget, fun and quick"
+              style={{width:'100%',height:80,padding:10,fontSize:16,border:'1px solid var(--border)',borderRadius:8,background:'var(--bg)',color:'var(--text)',fontFamily:'inherit'}} />
+            <div style={{fontSize:12,color:'var(--muted)',marginTop:4}}>{f.customStyle.length}/300. Voice and video type above still apply.</div>
+          </>
+        )}
+        <label className="check" style={noVoice ? {opacity:.5} : null}><input type="checkbox" checked={f.cta && !noVoice} disabled={noVoice} onChange={e => set('cta', e.target.checked)} /> CTA to be said in video{noVoice ? ' (needs a voice)' : ''}</label>
+        <label className="check"><input type="checkbox" checked={f.textOverlay} onChange={e => set('textOverlay', e.target.checked)} /> Text on video (e.g. “Cute toy”, comment, DM)</label>
+        {f.textOverlay && (
+          <div style={{marginTop:8,padding:'4px 12px 12px',border:'1px solid var(--border)',borderRadius:8}}>
+            <div style={{fontSize:13,color:'var(--muted)',marginTop:8}}>Pick up to {OVERLAY_MAX} ({f.overlayOpts.length}/{OVERLAY_MAX}). They appear in this order: about the product, then your own text, then call to action.</div>
+            {OVERLAY_GROUPS.map(g => (
+              <div key={g.title}>
+                <label style={{marginTop:10}}>{g.title}</label>
+                {g.items.map(([id, text]) => {
+                  const on = f.overlayOpts.includes(id);
+                  const locked = !on && f.overlayOpts.length >= OVERLAY_MAX;
+                  return (
+                    <label key={id} className="check" style={{marginTop:6, opacity: locked ? .5 : 1}}>
+                      <input type="checkbox" checked={on} disabled={locked} onChange={() => toggleOv(id)} /> {text}
+                    </label>
+                  );
+                })}
+              </div>
+            ))}
+            {f.overlayOpts.includes('custom') && (
+              <>
+                <label>Your own text (spelled exactly as typed)</label>
+                <input type="text" maxLength={40} value={f.overlayCustom} onChange={e => set('overlayCustom', e.target.value)} placeholder="e.g. Desk buddy" />
+                <div style={{fontSize:12,color:'var(--muted)',marginTop:4}}>{f.overlayCustom.length}/40</div>
+              </>
+            )}
+          </div>
+        )}
+        <label>Action</label>
+        <select value={f.mode} onChange={e => set('mode', e.target.value)}>
+          <option value="prompt">1. Prompt for YT Create + Instagram caption</option>
+          <option value="video">2. Video creation (prompt + caption + video)</option>
+          <option value="post">3. Instagram Reel posting (prompt + caption + video + post)</option>
+        </select>
+        <div style={{fontSize:12,color:'var(--muted)',marginTop:4}}>The prompt and the caption appear below as soon as they are ready, before the video is made. If a later step gets stuck, copy them and carry on by hand.</div>
+        {error && <div className="err">{error}</div>}
+        <div className="btns">
+          {!running && <button onClick={() => submit(false)}>Submit</button>}
+          {running && <button className="stop" onClick={stop}>■ Stop</button>}
+          {status !== 'idle' && <button className="again" onClick={() => submit(true)}>↻ Start again</button>}
+        </div>
+      </div>
+      {prompt && (
+        <div className="card">
+          <div className="row"><strong>YT Create prompt ({prompt.length} chars)</strong><span style={{cursor:'pointer',color:'var(--accent)'}} onClick={copyPrompt}>{copied ? 'Copied ✓' : 'Copy'}</span></div>
+          <textarea ref={pbox} readOnly value={prompt} style={{width:'100%',height:150,marginTop:10,padding:10,fontSize:14,border:'1px solid var(--border)',borderRadius:8,background:'var(--bg)',color:'var(--text)'}} />
+        </div>
+      )}
+      {caption && (
+        <div className="card">
+          <div className="row"><strong>Instagram caption ({caption.length} chars)</strong><span style={{cursor:'pointer',color:'var(--accent)'}} onClick={copyCaption}>{copiedCap ? 'Copied ✓' : 'Copy'}</span></div>
+          <textarea ref={cbox} readOnly value={caption} style={{width:'100%',height:190,marginTop:10,padding:10,fontSize:14,border:'1px solid var(--border)',borderRadius:8,background:'var(--bg)',color:'var(--text)'}} />
+        </div>
+      )}
+      <div className="card">
+        <div className="row"><strong>Output logs</strong><span style={{display:'flex',gap:10,alignItems:'center'}}>{logs.length > 0 && <span style={{cursor:'pointer',color:'var(--accent)',fontSize:14}} onClick={clearLogs}>Clear log</span>}<span className={'badge ' + status}>{status}</span></span></div>
+        <pre ref={box}>{logs.length ? logs.join('\n') : 'Logs will appear here…'}</pre>
+      </div>
+      <div className="card">
+        <div className="row"><strong>Appium log</strong>{alogs.length > 0 && <span style={{cursor:'pointer',color:'var(--accent)',fontSize:14}} onClick={clearAppium}>Clear log</span>}</div>
+        <pre ref={abox} style={{height:240,color:'#9ecbff'}}>{alogs.length ? alogs.join('\n') : 'Appium output will appear here…'}</pre>
+      </div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

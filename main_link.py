@@ -1,5 +1,6 @@
 """Link -> video + caption. By default it does NOT post anything. main.py is untouched.
 Use: python main_link.py "PRODUCT_LINK"           (make video + caption only, you post by hand)
+     python main_link.py "PRODUCT_LINK" --prompt-only (only the YT Create prompt + Instagram caption, no video)
      python main_link.py "PRODUCT_LINK" --post    (also posts the Reel on Instagram + links Creator Club auto-DM,
                                                    ONLY if every video check passed)
 """
@@ -539,7 +540,23 @@ def create_video(d, p, shot_remote, prompt=None, n_images=1):
 LAST_POST = {"caption": "", "tags": ""}
 
 
-def write_post(out_dir, url, p, script=None, report=None):
+def _caption_ready():
+    c = (LAST_POST.get("caption") or "").strip()
+    return bool(c) and not c.startswith("(Caption nahi bana")
+
+
+def write_post(out_dir, url, p, script=None, report=None, regen=False):
+    """Writes post.txt. The caption is written by the AI only ONCE per run: the first call makes it (right after the prompt),
+    later calls (after the video) reuse it, so the caption you already saw does not change. regen=True forces a new one."""
+    st = (script or {}).get("style") or {}
+    cta_line = st.get("caption_cta") or CTA_LINE          # rotating wording, always contains "Comment LINK" (the auto-DM keyword)
+    tone = st.get("caption_tone") or ""                   # pure content / light / direct: how much the caption sounds like an ad
+    if (script or {}).get("caption_hook"):
+        tone += "A possible opening idea (rewrite freely, keep it natural): " + script["caption_hook"] + " "
+    if script is not None and not script.get("spoken_cta", True):
+        tone += "The video does NOT say the call to action out loud, so the caption must carry it clearly at the end. "
+    if tone:
+        tone += "\n"
     prompt = (
         "You write Instagram Reel captions for an Indian affiliate creator.\n"
         "Product: " + p["name"] + "\n"
@@ -549,22 +566,27 @@ def write_post(out_dir, url, p, script=None, report=None):
         "Use ONLY these facts. Do not invent discounts, ratings, materials, sizes or claims.\n"
         "Rules: simple Hinglish (Hindi in English letters), cute friendly tone, catchy first line, 2-3 short lines, "
         "no price, no words like 'guaranteed' or 'best', at most 3 emojis.\n"
-        "Just before the last line add: (Affiliate link - I may earn a commission)\n"
-        "The caption must END with the exact line: Comment LINK to get the link in your DM\n"
+        + tone + "Just before the last line add: (Affiliate link - I may earn a commission)\n"
+        "The caption must END with the exact line: " + cta_line + "\n"
         "Return JSON: {\"caption\": \"...\", \"hashtags\": [\"#...\"]} with 6 to 8 hashtags including #ad"
     )
-    caption, tags = "", ""
-    try:
-        data = json.loads(llm.generate([prompt]))
-        caption = str(data.get("caption", "")).strip()
-        h = data.get("hashtags", [])
-        tags = " ".join(h) if isinstance(h, list) else str(h)
-    except Exception as e:
-        print("  caption nahi bana:", str(e)[:150])
-        caption = "(Caption nahi bana. Thodi der baad dobara try karo.)"
-    LAST_POST["caption"], LAST_POST["tags"] = caption, tags
+    if _caption_ready() and not regen:
+        caption, tags, cta_line = LAST_POST["caption"], LAST_POST["tags"], LAST_POST.get("cta") or cta_line
+    else:
+        caption, tags = "", ""
+        try:
+            data = json.loads(llm.generate([prompt]))
+            caption = str(data.get("caption", "")).strip()
+            h = data.get("hashtags", [])
+            tags = " ".join(h) if isinstance(h, list) else str(h)
+        except Exception as e:
+            print("  caption nahi bana:", str(e)[:150])
+            caption = "(Caption nahi bana. Thodi der baad dobara try karo.)"
+        LAST_POST["caption"], LAST_POST["tags"], LAST_POST["cta"] = caption, tags, cta_line
     text = ("PRODUCT: " + p["name"] + "\nLINK: " + url + "\n\nCAPTION:\n" + caption + "\n\nHASHTAGS:\n" + tags + "\n")
     if script:
+        _st = script.get("style") or {}
+        text += "\nREEL FORMAT: %s | voice: %s | job: %s | ad level: %s\n" % (_st.get("label"), _st.get("voice"), _st.get("job"), _st.get("ad"))
         text += "\nVOICEOVER SCRIPT:\n" + script["voiceover"] + "\n"
     if report:
         text += ("\nVIDEO CHECK: " + ("PASS" if report.get("pass") else "FAILED - dekh ke hi post karna") + "\n"
@@ -590,21 +612,37 @@ def build_instagram_caption():
         return None
     if DISCLOSURE.lower() not in cap.lower():
         cap = cap + "\n" + DISCLOSURE
-    if CTA_LINE.lower() not in cap.lower():
-        cap = cap + "\n" + CTA_LINE
+    if "comment link" not in cap.lower():               # any rotated wording is fine as long as it says "Comment LINK"
+        cap = cap + "\n" + (LAST_POST.get("cta") or CTA_LINE)
     if "#ad" not in (" " + tags.lower() + " "):
         tags = (tags + " #ad").strip()
     return (cap + "\n\n" + tags).strip()[:2200]
 
 
-def post_to_instagram(d, out_dir, p, report):
+def publish_caption(out_dir):
+    """Writes caption.txt (exactly what will be typed in Instagram) and prints one CAPTION>> line for the control page."""
+    cap = build_instagram_caption()
+    if not cap:
+        print("  (caption nahi bana: Instagram caption box khali rahega)")
+        return None
+    with open(os.path.join(out_dir, "caption.txt"), "w", encoding="utf-8-sig") as f:
+        f.write(cap)
+    print("CAPTION>> " + json.dumps(cap, ensure_ascii=False))       # the control page shows this in its own box with a Copy button
+    return cap
+
+
+def post_to_instagram(d, out_dir, p, report, script=None):
     """Post video.mp4 as a Reel, then link the Meesho Creator Club auto-DM (keyword: Link).
     Refuses to post when the checks did not pass or the voice could not be checked."""
     checks = (report or {}).get("checks", {})
     if not report or not report.get("pass"):
         print("\nPOST NAHI KIYA: video checks pass nahi hue (%s)." % (report or {}).get("reason"))
         return False
-    if checks.get("pronunciation") is None or checks.get("same_product") is None:
+    vc = (script or {}).get("voice_check", "strict")
+    if vc == "presence":
+        print("\nPOST NAHI KIYA: gaane / jingle ke shabd check nahi ho sakte. Khud sun ke post karo.")
+        return False
+    if (vc == "strict" and checks.get("pronunciation") is None) or checks.get("same_product") is None:
         print("\nPOST NAHI KIYA: voice ya product match check nahi ho paya. Khud dekh ke post karo.")
         return False
     cap = build_instagram_caption()
@@ -651,7 +689,12 @@ def post_to_instagram(d, out_dir, p, report):
 
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    do_post = "--post" in sys.argv[1:]
+    # MODE from the control page. Every level includes the ones before it:
+    #   prompt = YT Create prompt + Instagram caption | video = + the video | post = + the Instagram Reel post and auto-DM
+    mode_env = {"prompt_only": "prompt", "yt_only": "video", "yt_instagram": "post"}.get(
+        os.getenv("MODE", "").strip().lower(), os.getenv("MODE", "").strip().lower())
+    do_post = "--post" in sys.argv[1:] or mode_env == "post"
+    prompt_only = "--prompt-only" in sys.argv[1:] or mode_env == "prompt"           # prompt + caption only, no video
     if len(args) < 1:
         print('Use: python main_link.py "PRODUCT_LINK" [--post]')
         return
@@ -662,6 +705,9 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     d = None
     try:
+        print("Settings: mode=%s | video type=%s | spoken CTA=%s | text on video=%s"
+              % ("prompt + caption only" if prompt_only else ("prompt + caption + video + Instagram post" if do_post else "prompt + caption + video"),
+                 os.getenv("VIDEO_TYPE", "auto"), os.getenv("CTA", "random"), os.getenv("TEXT_OVERLAY", "false")))
         print("1/5 Phone connect ho raha hai...")
         d = phone.connect()
         print("2/5 Link phone pe khol raha hoon...")
@@ -704,6 +750,9 @@ def main():
         print("  Voiceover:", script["voiceover"])
         print("  Voice text (Devanagari):", script.get("voice_hi", ""))
         print("  Meaning:", script.get("meaning", ""))
+        _st = script.get("style") or {}
+        print("  Reel format: %s | voice: %s | job: %s | ad level: %s | spoken CTA: %s"
+              % (_st.get("label"), _st.get("voice"), _st.get("job"), _st.get("ad"), script.get("spoken_cta")))
         prompt = script["yt_prompt"]
         is_combo = bool(COMBO_RE.search((p["name"] + " " + url.replace("-", " ")).lower()))
         if is_combo:
@@ -712,6 +761,19 @@ def main():
         print("  YouTube prompt (%d chars): %s" % (len(prompt), prompt))
         with open(os.path.join(out_dir, "yt_prompt.txt"), "w", encoding="utf-8-sig") as _f:
             _f.write(prompt)
+        print("YTPROMPT>> " + prompt)         # the control page shows this line in its own box with a Copy button
+        print("   Instagram caption ban raha hai (video se pehle, taaki atak jaye to bhi mil jaye)...")
+        write_post(out_dir, url, p, script, None)       # post.txt + the caption (written once, reused after the video)
+        publish_caption(out_dir)
+        if prompt_only:
+            print("\nPROMPT + CAPTION READY. Video NAHI banaya (prompt + caption mode).")
+            print("Reference photos for YouTube Create:", ", ".join(ref_files or [shot_local]))
+            print("Folder:", out_dir)
+            try:
+                os.startfile(out_dir)
+            except Exception:
+                pass
+            return
         best, report = None, None
         MAX_TRIES = int(os.getenv("MAX_VIDEO_TRIES", "5"))
         for attempt in range(1, MAX_TRIES + 1):
@@ -795,7 +857,7 @@ def main():
         shutil.copyfile(best, final)
         if not report["pass"]:
             print("\nWARNING: video 2 baar check me fail hui. Video rakh li hai, par post karne se pehle khud dekh lo.")
-        print("5/5 Caption ban raha hai...")
+        print("5/5 post.txt me video check ki report jod raha hoon (caption wahi hai jo pehle bana tha)...")
         write_post(out_dir, url, p, script, report)
         print("\nTAIYAAR! Folder:", out_dir)
         print("Video phone ki gallery mein bhi hai. Dekh lo, sahi lage to post kar do.")
@@ -805,7 +867,7 @@ def main():
             pass
         if do_post:
             try:
-                post_to_instagram(d, out_dir, p, report)
+                post_to_instagram(d, out_dir, p, report, script)
             except Exception as e:      # the video + caption are already saved, so this is not a total failure
                 print("\nPOSTING FAIL:", str(e)[:200], "- video aur caption folder me safe hain, manually post karo.")
     except Exception as e:

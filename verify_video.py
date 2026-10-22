@@ -142,14 +142,18 @@ def check_video(video, product, script):
     if dur < 5:
         return {"pass": False, "reason": "video is too short (%.1fs)" % dur, "transcript": "", "summary": "",
                 "checks": {}, "unchecked": []}
-    if not _has_audio(video):
+    # script["voice_check"]: strict = words are checked (default), presence = a sung/voice line must exist, none = music/ASMR/silent format
+    vc = script.get("voice_check", "strict")
+    if vc != "none" and not _has_audio(video):
         return {"pass": False, "reason": "video has no audio / no voiceover", "transcript": "", "summary": "",
                 "checks": {"has_audio": False}, "unchecked": []}
     with tempfile.TemporaryDirectory() as tmp:
         frames = _frames(video, tmp, dur)
-        audio_path = _audio(video, tmp)
+        audio_path = _audio(video, tmp) if vc != "none" else None
         transcript, note = (None, "audio could not be extracted (is ffmpeg installed?)")
-        if audio_path:
+        if vc == "none":
+            note = "no-voice format: speech not checked"      # also avoids Whisper inventing words from music
+        elif audio_path:
             transcript, note = _transcribe(audio_path)
     if len(frames) < 3:
         return {"pass": False, "reason": "could not extract frames (is ffmpeg installed?)", "transcript": "",
@@ -160,14 +164,26 @@ def check_video(video, product, script):
         print("  heard:", transcript[:200])
 
     heard = ('"' + transcript + '"') if transcript else "(not available - leave matches_script as null)"
+    if vc == "none":
+        voice_part = ("This video is DELIBERATELY WITHOUT speech (" + str(script.get("voiceover", "")) + "): music or natural sounds only. "
+                      "Leave matches_script as null.\n")
+    else:
+        voice_part = ("Speech-to-text of what is really spoken in the video (Hindi words in Devanagari, English words in Latin letters, small mistakes are normal): "
+                      + heard + "\n"
+                      "Intended voiceover (Hinglish): " + script["voiceover"] + "\n"
+                      + (("The voiceover should END with: " + CTA + "\n") if (vc == "strict" and script.get("spoken_cta", True)) else ""))
+    style_note = ""
+    if (script.get("style") or {}).get("loose_product"):
+        style_note = ("This reel is deliberately a cartoon / clay / 3D animation: the product may look stylised. frames_show_product is true "
+                      "when the animated object clearly has the same overall shape, main colours and key parts as the product.\n")
+    if (script.get("style") or {}).get("overlay"):
+        style_note += ("Big on-screen text captions (the product name, 'Comment LINK', 'Link in your DM') are EXPECTED here: they are part of the design, "
+                       "not glitches and not shopping-app UI. Only a price, discount, 'best' or 'guaranteed' in that text counts as bad_text_or_claims.\n")
     prompt = (
         "You are quality-checking an Instagram Reel made for the product below. "
         "You get ONE image: " + str(len(frames)) + " frames of the video in time order (left to right, top to bottom).\n"
         "Product: " + product["name"] + " - " + (product["description"] or "") + "\n"
-        "Speech-to-text of what is really spoken in the video (Hindi words in Devanagari, English words in Latin letters, small mistakes are normal): "
-        + heard + "\n"
-        "Intended voiceover (Hinglish): " + script["voiceover"] + "\n"
-        "The voiceover should END with: " + CTA + "\n\n"
+        + voice_part + style_note + "\n"
         "Answer as JSON:\n"
         "{\"summary\": \"one line: what the video shows\", "
         "\"matches_script\": true/false/null (the spoken text follows the intended voiceover in meaning, not unrelated talk; "
@@ -204,6 +220,14 @@ def check_video(video, product, script):
         "frames_clean": _b(r["frames_clean"]),
         "no_bad_claims": not _b(r["bad_text_or_claims"]),
     }
+    if vc == "none":            # music / ASMR / silent format: nothing to check about speech
+        for k in ("has_speech", "voice_is_hinglish", "cta_spoken", "matches_script"):
+            checks.pop(k, None)
+    elif vc == "presence":      # sung line: only that a voice exists
+        for k in ("voice_is_hinglish", "cta_spoken", "matches_script"):
+            checks.pop(k, None)
+    elif not script.get("spoken_cta", True):     # pure-content video: the call to action is in the caption, not spoken
+        checks.pop("cta_spoken", None)
     failed = [k for k, v in checks.items() if v is False]
     unchecked = [k for k, v in checks.items() if v is None]
     if failed:

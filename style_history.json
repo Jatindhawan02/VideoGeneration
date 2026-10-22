@@ -1,0 +1,68 @@
+[
+ {
+  "format": "voice_note",
+  "voice": "talk",
+  "job": "story",
+  "ad": "light",
+  "setting": "fairy-light bokeh backdrop",
+  "camera": "slow orbit around the product",
+  "mood": "playful",
+  "cta": null,
+  "ts": "2026-10-22 15:03"
+ },
+ {
+  "format": "asmr_hands",
+  "voice": "asmr",
+  "job": "satisfying",
+  "ad": "direct",
+  "setting": "white marble surface in soft daylight",
+  "camera": "slow macro push-in",
+  "mood": "fresh and bright",
+  "cta": null,
+  "ts": "2026-10-22 15:22"
+ },
+ {
+  "format": "pet_play",
+  "voice": "music",
+  "job": "pet_play",
+  "ad": "light",
+  "setting": "green balcony with plants",
+  "camera": "top-down flat lay",
+  "mood": "funny",
+  "cta": null,
+  "ts": "2026-10-22 15:54"
+ },
+ {
+  "format": "comedy_skit",
+  "voice": "talk",
+  "job": "comedy",
+  "ad": "light",
+  "setting": "kitchen counter in morning light",
+  "camera": "steady close-up",
+  "mood": "energetic",
+  "cta": null,
+  "ts": "2026-10-22 17:42"
+ },
+ {
+  "format": "classic",
+  "voice": "talk",
+  "job": "story",
+  "ad": "pure",
+  "setting": "soft pastel gradient backdrop",
+  "camera": "handheld POV",
+  "mood": "dreamy",
+  "cta": null,
+  "ts": "2026-10-22 18:04"
+ },
+ {
+  "format": "voice_note",
+  "voice": "talk",
+  "job": "story",
+  "ad": "light",
+  "setting": "warm wooden desk",
+  "camera": "low-angle hero shot",
+  "mood": "calm and minimal",
+  "cta": null,
+  "ts": "2026-10-22 18:15"
+ }
+]

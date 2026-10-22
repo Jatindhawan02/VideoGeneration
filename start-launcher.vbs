@@ -1,0 +1,1 @@
+   CreateObject("WScript.Shell").Run "cmd /c cd /d C:\affiliate-bot\VideoGeneration && node launcher.js", 0

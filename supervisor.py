@@ -209,23 +209,55 @@ def fix_prompt(p, script, old_prompt, problem, attempt):
         print("  [watcher] looks temporary -> same prompt again")
         return old_prompt
     print("  [watcher] rewriting the prompt to be safer for the video generator")
+    st = (script or {}).get("style") or {}
+    people = (script or {}).get("people", "none")
+    overlay = (st.get("overlay") or "").strip()
+    spoken = bool((script or {}).get("spoken_cta"))
+    cta_hi = ((script or {}).get("cta_hi") or "").strip()
+    has_voice = st.get("voice_check", "strict") != "none"
+    drop_people = attempt >= 3          # first rewrites keep the video type chosen on the control page; later ones play it safe
+    if people == "none" or drop_people:
+        who = ("Show ONLY the product (toy/object) with simple motion and a plain background. "
+               "Remove babies, children, faces and all people. ")
+    elif people == "hands":
+        who = "Keep it as it is: only an adult's hands (no face) handle the product. Remove babies, children and faces. "
+    elif people == "adult_model":
+        who = "Keep ONE adult Indian model using the product, but make it simple and modest. Remove babies, children and any famous-looking face. "
+    else:
+        who = "Keep one healthy adult pet playing with the product. Remove people, babies and children. "
+    if st.get("adult_angle") and people in ("hands", "adult_model"):
+        who += "Present it as a fun desk toy or stress-buster that grown-ups enjoy, never as a children's product. "
+    if has_voice:
+        voice = ("Keep the short spoken Hinglish line" + (" and the spoken call to action at the end (" + cta_hi + "). " if (spoken and cta_hi)
+                 else ", and do NOT add a spoken call to action. "))
+    else:
+        voice = "Keep it with no voice, music or natural sound only. "
+    text_rule = (("Keep this on-screen text instruction exactly: " + overlay + " ") if overlay else "No text on screen. ")
     ask = (
         "A video generator app refused or failed on this prompt. Rewrite it so it is accepted.\n"
         "Product: " + p["name"] + "\nFailure: " + problem.reason + "\n\nORIGINAL PROMPT:\n" + old_prompt[:1800] + "\n\n"
-        "Rules for the rewrite: keep the same structure and keep a short spoken Hinglish line plus the 'Comment LINK' call to action. "
-        "Show ONLY the product (toy/object) with simple motion and a plain background. "
-        "Remove babies, children, faces, people, brand names, medical or developmental claims (like 'helps kids learn/grow'), "
-        "and anything about age safety. Keep it short and simple.\n"
+        "Rules for the rewrite: keep the same structure. " + voice + who + text_rule +
+        "Remove brand names, medical or developmental claims (like 'helps kids learn/grow'), "
+        "and anything about age safety. Keep it short and simple, under 880 characters in total.\n"
         "Return JSON: {\"prompt\": \"...\"}")
 
     def validate(t):
         try:
-            return None if len(json.loads(t).get("prompt", "")) > 40 else "prompt too short"
+            n = len(json.loads(t).get("prompt", ""))
+            return "prompt too short" if n <= 40 else ("prompt too long (%d characters, max 900)" % n if n > 900 else None)
         except Exception:
             return "not valid JSON"
 
     try:
-        return json.loads(llm.generate([ask], validate=validate))["prompt"]
+        new = json.loads(llm.generate([ask], validate=validate))["prompt"]
+        # make sure the choices from the control page survived the rewrite
+        if overlay and "on-screen text" not in new.lower() and len(new) + len(overlay) + 1 <= 900:
+            new = new.rstrip() + " " + overlay
+        if spoken and has_voice and cta_hi and cta_hi not in new:
+            add = " The voiceover must END with these exact words: " + cta_hi
+            if len(new) + len(add) <= 900:
+                new = new.rstrip() + add
+        return new
     except Exception as e:
         print("  [watcher] could not rewrite the prompt:", str(e)[:100])
         return old_prompt

@@ -13,9 +13,10 @@ Preview scripts without the phone:
 Your own taste: write rules / favourite lines in script_style.md (same folder). They are given to the AI first.
 Optional .env: SCRIPT_PROVIDER_ORDER=gemini,groq  -> which AI provider writes the scripts (default: same order as everything else).
 """
-import json, os, re
+import json, os, random, re
 import llm
 import promptfit
+import reel_styles
 from config import SHORT_PROMPT_STYLE
 
 # What the voice must say at the end of every reel (change with SPOKEN_CTA in .env)
@@ -24,6 +25,18 @@ CTA = os.getenv("SPOKEN_CTA", "Link chahiye? Comment LINK, DM mein mil jayega.")
 CTA_HI = os.getenv("SPOKEN_CTA_HI", "Link चाहिए? Comment LINK, DM में मिल जाएगा।").strip()
 # YouTube Create prompt box has a limit; keep the prompt under this many characters
 MAX_PROMPT = int(os.getenv("YT_PROMPT_MAX", "880"))      # the app allows 900; keep a safety margin
+# Set by the control page: VIDEO_TYPE = hands | person | pet | animated (anything else = automatic),
+# CTA = true/false (voice says the call to action), TEXT_OVERLAY = true/false (big text like the product name, Comment LINK on the video)
+VIDEO_TYPE = os.getenv("VIDEO_TYPE", "auto").strip().lower()
+TEXT_OVERLAY = os.getenv("TEXT_OVERLAY", "").strip().lower() in ("1", "true", "yes", "on")
+# Which texts to show (control page, max 3): name, cute, hook, feature, custom, comment, dm, follow, bio. Empty = name + Comment LINK + Link in your DM.
+OVERLAY_OPTS = [x for x in os.getenv("TEXT_OVERLAY_OPTS", "").strip().lower().split(",") if x][:3]
+OVERLAY_CUSTOM = re.sub(r"\s+", " ", os.getenv("TEXT_OVERLAY_CUSTOM", "")).strip()[:40]
+OVERLAY_HOOKS = ["Wait for it", "Look what I found", "Guess what this is", "Watch till the end", "Okay, look at this"]
+OVERLAY_FIXED = {"comment": "Comment LINK", "dm": "Link in your DM", "follow": "Follow for more", "bio": "Shop link in bio"}
+if not hasattr(reel_styles, "VIDEO_TYPES"):
+    print("  WARNING: reel_styles.py in this folder is the OLD version. Replace it with the updated one, "
+          "otherwise video type and CTA from the control page are ignored.")
 
 STYLE = (SHORT_PROMPT_STYLE or "").strip().strip('"').strip("'")
 if STYLE.upper().startswith("SHORT_PROMPT_STYLE="):
@@ -69,6 +82,13 @@ PEOPLE = {
         "ref": "Use the reference photo only for the product's design, colour and fit. Do NOT copy the person in it: "
                "create a completely new adult model with a different face, hair and body. Never show the original model.",
     },
+    "pet": {
+        "scene": "the product from the reference image being played with or used by ONE friendly, healthy adult pet of the kind the "
+                 "product is made for (a cat for cat toys, a dog for dog toys), natural and cute, no people in the frame, "
+                 "plain bright background, no text on screen.",
+        "look": "9:16, bright clean background, no text on screen, a healthy adult pet plays with or uses the product, no people.",
+        "ref": "Use the reference photo only for the product's look. Do not copy any person or animal from it: show a new cute adult pet.",
+    },
 }
 PEOPLE_FORCE = os.getenv("PEOPLE_MODE", "auto").strip().lower()
 KIDS = re.compile(r"\b(baby|babies|kid|kids|child|children|infant|toddler|newborn|bachha|bachcha|baccha|bachche|bacche|school\s*bag)\b", re.I)
@@ -76,6 +96,31 @@ WEARABLE = re.compile(r"\b(kurti|kurta|kurtis|saree|sari|dress|top|tops|tshirt|t
                       r"salwar|suit|dupatta|shorts|leggings|palazzo|skirt|gown|blouse|co-ord|coord|shrug|jumpsuit|earring|earrings|"
                       r"necklace|jewellery|jewelry|bracelet|bangle|bangles|anklet|pendant|watch|sunglasses|shoes|sandals|heels|"
                       r"slippers|sneakers|scarf|stole|lipstick|kajal|eyeliner|makeup|nail\s*polish|hair\s*clip|scrunchie)\b", re.I)
+
+
+PETWORDS = re.compile(r"\b(cat|cats|kitten|kittens|dog|dogs|puppy|puppies|pet|pets)\b[\w\s-]{0,25}\b(toy|toys|bed|bowl|collar|leash|"
+                      r"feeder|house|scratcher|tunnel|ball|brush|harness|treat|treats|food|litter)\b|"
+                      r"\b(toy|toys|ball|bed|bowl|collar|leash)\b[\w\s-]{0,10}\bfor\s+(cats?|dogs?|pets?|puppy|puppies|kittens?)\b", re.I)
+
+
+def _animal(name):
+    t = (name or "").lower()
+    if re.search(r"\b(cat|cats|kitten|kittens)\b", t):
+        return "cat"
+    if re.search(r"\b(dog|dogs|puppy|puppies)\b", t):
+        return "dog"
+    return "cat or dog (the kind this product is made for)"
+
+
+KID_SCRUB = re.compile(r"\b(?:(?:for|of)\s+)?(?:babies|baby|kids?|child(?:ren)?|toddlers?|infants?|newborns?|bachh?as?|bachcha|baccha|bachche|bacche)(?:'s)?\b"
+                       r"|\b(?:ages?d?\s*)?\d+\s*(?:-\s*\d+\s*)?\+?\s*(?:years?|yrs?|months?)(?:\s*old)?\b\+?", re.I)
+
+
+def _scrub_kids(text):
+    """Takes child / baby / age words out of text that goes INTO the video app prompt (the app refuses child content)."""
+    t = KID_SCRUB.sub(" ", text or "")
+    t = re.sub(r"\(\s*\)", " ", t)
+    return re.sub(r"\s{2,}", " ", t).strip(" ,;-")
 
 
 def _people_mode(p, r):
@@ -87,6 +132,8 @@ def _people_mode(p, r):
     why = str(r.get("people_reason", "")).strip()
     if mode not in PEOPLE:                                  # the AI gave no usable answer: simple word check
         mode, why = ("adult_model", "wearable product") if WEARABLE.search(p["name"]) else ("none", "no clear need for a person")
+    if mode != "pet" and PETWORDS.search(p["name"]):          # cat/dog products: show the pet, not hands
+        mode, why = "pet", "pet product (the name says cat/dog)"
     if KIDS.search(text) and mode != "none":                # the video app refuses child content: never show a person
         mode, why = "none", "child/baby product: no people (the video app refuses child content)"
     return mode, why
@@ -103,12 +150,14 @@ def _clean(t):
 
 
 def _style_notes():
-    """The creator's own taste (script_style.md). Empty if the file does not exist."""
+    """The creator's own taste (script_style.md) plus, if typed on the control page, the style for THIS video (listed first)."""
+    custom = re.sub(r"\s+", " ", os.getenv("CUSTOM_STYLE", "")).strip()[:300]
+    head = ("STYLE FOR THIS VIDEO, written by the creator on the control page (follow it before everything else): " + custom + "\n\n") if custom else ""
     try:
         with open(STYLE_FILE, encoding="utf-8") as f:
-            return f.read().strip()[:1500]
+            return (head + f.read().strip()[:1500]).strip()
     except Exception:
-        return ""
+        return head.strip()
 
 
 def _gen_json(prompt, validate_fn):
@@ -242,8 +291,8 @@ def research(p):
         "\"surprise_detail\": \"the single most surprising or charming REAL detail from the page\", "
         "\"features\": [\"2-4 real features from the page or from the text printed on the product pictures, no invented specs\"], "
         "\"best_angle\": \"the single best reel angle for it: relatable pain, curiosity gap, surprise reveal, gift moment or mini story\", "
-        "\"people\": \"none or hands or adult_model\", \"people_reason\": \"one short reason\"}\n"
-        "people = who should appear in the video. adult_model: the product is worn or applied on the body (clothes, jewellery, "
+        "\"people\": \"none or hands or adult_model or pet\", \"people_reason\": \"one short reason\"}\n"
+        "people = who should appear in the video. pet: the product is made for a pet (cat or dog toys, beds, bowls, collars, leashes, grooming): a healthy adult pet shows it in use, always choose pet for pet products instead of hands. adult_model: the product is worn or applied on the body (clothes, jewellery, "
         "footwear, watch, glasses, hair or beauty items) or sells by how it looks on a person. hands: people hold or operate it "
         "(kitchen, cleaning or organising tools, gadgets, stationery, accessories, toys, items with a mechanism), so only adult hands "
         "show it working. none: it shows everything on its own (decor, lights, display pieces) or it is meant for babies or children.\n"
@@ -276,8 +325,7 @@ CRAFT = (
     "action is added after your lines automatically, so never write one.\n"
     "- LINE 1 = the HOOK: 3 to 9 words, spoken in the first 2 seconds.\n"
     "- LINE 2 = the PAYOFF: says in plain words what the product is AND the one specific thing that makes it neat.\n"
-    "- A stranger who has never seen the product must understand what it is and why it is neat. Line 2 must logically "
-    "answer or continue line 1.\n\n"
+    "- A stranger who has never seen the product must understand what it is and why it is neat.@@ANS@@\n\n"
     "CRAFT RULES:\n"
     "- Specific beats generic: every script needs one concrete detail from the product page or one concrete everyday "
     "situation (a real object, place or moment). Never use empty adjectives.\n"
@@ -289,7 +337,7 @@ CRAFT = (
     "- No price, discount, rating, health or safety claim, no comparison with other brands.\n"
     "- Use ONLY facts from the product page. Never invent a material, size, feature or result.\n\n"
     "- Use only words you hear in daily talk or on Instagram reels. No bookish Hindi, no odd verb forms. Test: say what your two "
-    "lines mean in plain English; if that sounds odd, or the two lines do not connect, rewrite them.\n"
+    "lines mean in plain English; if that sounds odd@@CONNECT@@, rewrite them.\n"
     "- Never show or mention a child, baby, kid or bachha (the video app refuses child content). Whether an adult appears in the video "
     "(wearing the product, or only hands) is given in the scene notes rule below.\n"
     "- Also write the SAME two lines as hi1 and hi2 for the video's voice, in MIXED script: every Hindi word in Devanagari, "
@@ -307,13 +355,17 @@ CRAFT = (
 )
 
 
-def _fact_rule(r):
+def _fact_rule(r, answer_rule=True):
     """Which product claims are proven, and how line 2 must connect to line 1."""
     f = [str(x) for x in r.get("features", []) if str(x).strip()]
     link = ("LINE 2 MUST ANSWER LINE 1: pick a hook about a small problem that this KIND of product solves, and let line 2 say "
             "what the product is and offer it as the solution (use X instead of Y). Mention a verified feature only as a plain fact "
             "(for example 'it has a handle'), never as an invented reason why it helps. A feature that has nothing to do with the hook "
             "is NOT a payoff: do not write a hook about one thing and a line 2 about another.")
+    if not answer_rule:
+        link = ("LINE 2 MAY BE A PUNCHLINE, TWIST OR REVEAL and need not answer line 1 like a solution, but it must still make sense after "
+                "line 1 and the viewer must understand what the product is by the end (the video shows it). Mention a verified feature "
+                "only as a plain fact, never as an invented reason why it helps.")
     if f:
         return ("VERIFIED FACTS (the ONLY product claims you may make): " + "; ".join(f) + ". "
                 "Anything else in RESEARCH is background for the situation, never a claim about the product. " + link)
@@ -321,7 +373,7 @@ def _fact_rule(r):
             "(what the viewer sees it being used for). No claim about size, thickness, material, hanging, strength or special abilities. " + link)
 
 
-def coherence_many(p, r, cands):
+def coherence_many(p, r, cands, answer_rule=True):
     """AI judge: does line 2 really answer line 1, and does it sound like natural talk? Returns [(ok, why)].
     If the AI is unavailable it lets the scripts through (the fact check has already run)."""
     if not cands:
@@ -329,12 +381,14 @@ def coherence_many(p, r, cands):
     listing = "\n".join("%d. %s | %s   (means: %s)" % (k + 1, c["line1"], c["line2"], c.get("english", ""))
                         for k, c in enumerate(cands))
     facts = "; ".join(str(x) for x in r.get("features", [])) or "none verified"
+    crit1 = ("line 2 directly answers or continues the question or problem in line 1" if answer_rule else
+             "line 1 and line 2 work together as a joke, a story beat, a confession or a reveal, and line 2 makes sense after line 1")
     prompt = (
         "Product: " + p["name"] + " (a friend would call it: " + str(r.get("plain_name", "")) + ")\n"
         "Verified product facts: " + facts + "\n\n"
         "Each script below is a 2-line Hinglish voiceover for a short product video: line 1 = hook, line 2 = payoff.\n" + listing + "\n\n"
         "Judge each one strictly, like a normal Indian viewer hearing it once. ok = true ONLY if ALL are true:\n"
-        "1) line 2 directly answers or continues the question or problem in line 1;\n"
+        "1) " + crit1 + ";\n"
         "2) the benefit follows from what the product is or from its verified facts (no leap of logic);\n"
         "3) it sounds like a natural sentence a person would say.\n"
         "NOT ok example: the hook is about a messy drawer and line 2 only says the product is made of plastic "
@@ -363,22 +417,18 @@ def coherence_many(p, r, cands):
         return [(True, "")] * len(cands)
 
 
-def candidates(p, r, notes):
+def candidates(p, r, notes, style=None):
+    st = style or {}
     prompt = (
-        CRAFT +
+        craft(st) + _style_brief(st) +
         ("\nTHE CREATOR'S OWN NOTES (follow these over everything else):\n" + notes + "\n" if notes else "") +
         "\nPRODUCT: " + p["name"] + "\nDETAILS: " + (p["description"] or "none") + "\n" + _visible_line(p) +
-        "RESEARCH: " + json.dumps(r, ensure_ascii=False) + "\n" + _fact_rule(r) + "\n\n"
-        "TASK: write 5 different scripts, one for each of these hook types: " + ", ".join(HOOK_TYPES) + ".\n"
-        "relatable_pain = an annoyance everyone knows, said honestly or funnily. "
-        "pov = starts with POV or Jab/Agar, puts the viewer in a moment. "
-        "curiosity_gap = a question or tease that line 2 answers. "
-        "surprise_detail = line 2 reveals the one unexpected real feature. "
-        "mini_story = a tiny scene with someone from home (Mummy, Bhai, Didi, Dost).\n"
-        "Scene notes describe what the camera shows: " + PEOPLE.get(r.get("people"), PEOPLE["none"])["scene"] +
-        " ONE clear motion that DEMONSTRATES its real feature or surprise detail from the research (how it works, what it does).\n"
-        "Before answering, check each script: 13 to 16 words, hook under 10 words, line 2 names what the product is, "
-        "no banned word, sounds like a real person.\n"
+        "RESEARCH: " + json.dumps(r, ensure_ascii=False) + "\n" + _fact_rule(r, st.get("answer_rule", True)) + "\n\n"
+        "TASK: write 5 different scripts using these hook types (each type at most twice): " + _hook_text(st) + "\n"
+        "Scene notes describe what the camera shows: " + (st.get("scene_rule") or PEOPLE.get(r.get("people"), PEOPLE["none"])["scene"]) +
+        " ONE clear motion that fits the format and, where it fits, shows its real feature or surprise detail from the research.\n"
+        "Before answering, check each script: 13 to 16 words, hook under 10 words, no banned word, sounds like a real person, "
+        "and it follows the FORMAT and AD LEVEL above.\n"
         "Return JSON: {\"candidates\": [{\"hook_type\": \"...\", \"line1\": \"...\", \"line2\": \"...\", "
         "\"hi1\": \"line 1: Hindi words in Devanagari, English words in Latin letters\", \"hi2\": \"line 2, same way\", \"english\": \"what the two lines mean in plain English\", "
         "\"scene1\": \"what the camera shows during line 1\", \"scene2\": \"what the camera shows during line 2\"}]}"
@@ -409,18 +459,19 @@ def candidates(p, r, notes):
     return out
 
 
-def edit(p, r, pool, notes):
+def edit(p, r, pool, notes, style=None):
     """The senior editor: pick the strongest candidate and polish it. Returns a dict or None."""
     listing = "\n".join("%d) [%s] %s %s | Devanagari: %s %s | meaning: %s" % (
         i + 1, c["hook_type"], c["line1"], c["line2"], c["hi1"], c["hi2"], c.get("english", "")) for i, c in enumerate(pool))
     prompt = (
         "You are the ruthless senior editor of a viral Indian Reels team.\n"
         "PRODUCT: " + p["name"] + "\nDETAILS: " + (p["description"] or "none") + "\n" + _visible_line(p) +
-        "RESEARCH: " + json.dumps(r, ensure_ascii=False) + "\n" + _fact_rule(r) + "\n"
+        "RESEARCH: " + json.dumps(r, ensure_ascii=False) + "\n" + _fact_rule(r, (style or {}).get("answer_rule", True)) + "\n" + _style_brief(style or {})
         + ("THE CREATOR'S OWN NOTES (follow these first): " + notes + "\n" if notes else "") +
         "\nCANDIDATE SCRIPTS (line 1 = hook, line 2 = payoff):\n" + listing + "\n\n"
         "Judge each one on: 1) does the hook stop the scroll in 2 seconds, 2) can a stranger tell what the product is and why it is neat, "
-        "3) does line 2 logically follow line 1, 4) does it sound like a real person talking in Hinglish (not an ad, not translated), "
+        "3) " + ("does line 2 logically follow line 1" if (style or {}).get("answer_rule", True) else
+                 "do the two lines work together as a joke, story beat or reveal") + ", 4) does it sound like a real person talking in Hinglish (not an ad, not translated), "
         "5) is there a concrete detail from the product page.\n"
         "Pick the single best one, then POLISH it: fix grammar, replace every generic word with a concrete one, and keep the total at 13 to 16 words. "
         "If all candidates are weak, rewrite the best one completely. Do not add facts that are not in the details. "
@@ -429,7 +480,7 @@ def edit(p, r, pool, notes):
         "Check the meaning: if the two lines do not connect or sound odd in plain English, rewrite them. "
         "Also give the final two lines as hi1, hi2 in MIXED script: Hindi words in Devanagari, every English word (octopus, smile, "
         "link, comment, DM, product words) stays in Latin letters, never in Devanagari.\n"
-        "Also write what the camera shows (" + PEOPLE.get(r.get("people"), PEOPLE["none"])["scene"] + "). The motion must show how the product works or its surprise detail.\n"
+        "Also write what the camera shows (" + ((style or {}).get("scene_rule") or PEOPLE.get(r.get("people"), PEOPLE["none"])["scene"]) + "). The motion must fit the format and, where it fits, show how the product works or its surprise detail.\n"
         "Return JSON: {\"pick\": <number of the candidate you started from, or 0 if rewritten>, \"line1\": \"...\", \"line2\": \"...\", "
         "\"hi1\": \"...\", \"hi2\": \"...\", \"english\": \"what the final lines mean in plain English\", "
         "\"scene1\": \"...\", \"scene2\": \"...\", \"why\": \"one short sentence\"}"
@@ -457,37 +508,326 @@ def edit(p, r, pool, notes):
             "why": _clean(str(d.get("why", "")))}
 
 
+# ------------------------------------------------------------ format helpers ----
+DEFAULT_VOICE_LINE = ("Voice: warm, upbeat and natural, like a friend sending a voice note, speaking everyday Hindi. "
+                      "Pronounce every word clearly and exactly as written, do not skip, merge or change any word.")
+
+
+def craft(style=None):
+    """CRAFT text for this format: the 'line 2 must answer line 1' rule is kept ONLY for formats that need it."""
+    st = style or {}
+    ans = st.get("answer_rule", True)
+    t = CRAFT.replace("@@ANS@@", " Line 2 must logically answer or continue line 1." if ans
+                      else " Line 2 must make sense after line 1 (a punchline, twist or reveal is welcome).")
+    t = t.replace("@@CONNECT@@", ", or the two lines do not connect" if ans else "")
+    if st and st.get("format") != "classic":      # the GOOD examples are all problem -> solution: they would pull every format back to it
+        t = "\n".join(l for l in t.split("\n") if not l.startswith("GOOD"))
+    return t
+
+
+def _style_brief(st):
+    """The format, the ad level and an optional trend, as text for the AI prompts."""
+    if not st:
+        return ""
+    out = "\nFORMAT FOR THIS REEL: " + (st.get("brief") or "") + "\n" + (st.get("ad_brief") or "") + "\n"
+    if st.get("trend"):
+        out += "OPTIONAL TREND IDEAS (use one ONLY if it fits this product naturally, never force it): " + st["trend"] + "\n"
+    return out
+
+
+def _hook_text(st):
+    types = [t for t in (st.get("hook_types") or HOOK_TYPES) if t in reel_styles.HOOK_DEFS] or HOOK_TYPES
+    return "; ".join("%s = %s" % (t, reel_styles.HOOK_DEFS[t]) for t in types)
+
+
+def _cut(t, n):
+    if len(t) <= n:
+        return t
+    return t[:max(0, n)].rsplit(" ", 1)[0].rstrip(" ,;:-")
+
+
+def _yt_facts(p, r):
+    """Facts for YouTube: each research feature must be proven by the page (code checks + a quoted proof) and the AI must really have run."""
+    feats = [_clean(str(x)) for x in r.get("features", []) if str(x).strip()]
+    feats = [f for f in feats if f and len(f) <= 95 and not _banned(f)]
+    facts = ""
+    if feats:
+        good_f = []
+        for f, res_ in zip(feats, claims_check_many(p, r, feats, detail=True)):
+            if res_["ok"] and res_["ai"]:
+                good_f.append(f)
+            else:
+                print("  [script] fact dropped (%s): %s" % ("; ".join(res_["unsupported"]) or "AI check could not run", f))
+        facts = "; ".join(good_f[:2])
+        if len(facts) > 95:
+            facts = good_f[0]
+    print("  [script] facts for YouTube:", facts)
+    return facts
+
+
+def _overlay_ai(p, r, want):
+    """One small AI call for the generated texts: 'cute' (a cute short caption) and 'feature' (one verified feature, shortened)."""
+    feats = [str(x) for x in r.get("features", []) if str(x).strip()]
+    want = [w for w in want if w == "cute" or (w == "feature" and feats)]
+    if not want:
+        return {}
+    keys = []
+    if "cute" in want:
+        keys.append('"cute": "a cute, playful on-screen caption of 2 to 4 words about this product, plain English, no emoji"')
+    if "feature" in want:
+        keys.append('"feature": "ONE of the VERIFIED FACTS below shortened to 2 to 5 plain English words, adding nothing new"')
+    prompt = ("Write very short on-screen text for a 10 second vertical Instagram Reel of an Indian affiliate product.\n"
+              "PRODUCT: " + p["name"] + "\nDETAILS: " + (p.get("description") or "none") + "\n"
+              + (("VERIFIED FACTS: " + "; ".join(feats) + "\n") if feats else "")
+              + "Rules: no price, discount, 'best' or 'guaranteed', no child, baby or kid, no double quotes, no emoji, never invent a feature.\n"
+              "Return JSON: {" + ", ".join(keys) + "}")
+
+    def validate(text):
+        try:
+            data = json.loads(text)
+        except Exception:
+            return "not valid JSON"
+        for k in want:
+            v = _clean(str(data.get(k, "")))
+            if not v:
+                return "missing '" + k + "'"
+            if len(_words(v)) > 6:
+                return "'" + k + "' is too long, 6 words at most"
+            if _banned(v):
+                return "banned word: " + _banned(v)
+        return None
+    d = _gen_json(prompt, validate)
+    return {k: _clean(str(d.get(k, ""))) for k in want}
+
+
+def _overlay_line(p, r):
+    """The on-screen text instruction used when the 'Text on video' box is ticked.
+    Order is fixed: hook, product name, cute caption, feature, own text, then the call-to-action texts last."""
+    opts = OVERLAY_OPTS or ["name", "comment", "dm"]
+    ai = {}
+    if "cute" in opts or "feature" in opts:
+        try:
+            ai = _overlay_ai(p, r, opts)
+        except Exception as e:
+            print("  [script] generated on-screen text skipped:", str(e)[:100])
+    name = " ".join(_clean(str(r.get("plain_name") or p["name"])).split()[:4])
+    if _banned(name):
+        name = ""
+    texts = []
+    if "hook" in opts:
+        texts.append(random.choice(OVERLAY_HOOKS))
+    if "name" in opts and name:
+        texts.append(name[:1].upper() + name[1:])
+    for k in ("cute", "feature"):
+        v = ai.get(k, "")
+        if k in opts and v:
+            texts.append(v[:1].upper() + v[1:])
+    if "custom" in opts and _clean(OVERLAY_CUSTOM):
+        texts.append(_clean(OVERLAY_CUSTOM))
+    for k in ("comment", "dm", "follow", "bio"):
+        if k in opts:
+            texts.append(OVERLAY_FIXED[k])
+    seen, uniq = set(), []
+    for t in texts:
+        if t.lower() not in seen:
+            seen.add(t.lower())
+            uniq.append(t)
+    if not uniq:
+        return ""
+    return "Show big, clear on-screen text captions, spelled exactly: " + ", then ".join(uniq) + "."
+
+
 # ------------------------------------------------------------------- prompt ----
-def _build_prompt(name, body, scenes, extra="", facts="", people="none"):
-    # Text typed into YouTube Create. Spoken lines and the call to action are always kept in full.
-    # Leftover room goes first to the shot that DEMONSTRATES the product, then to the product facts.
-    # Nothing is cut in the middle: a part either fits completely or is left out.
-    tail = " The voiceover must END with these exact words: " + CTA_HI
+def _build_prompt(name, body, scenes, extra="", facts="", people="none", style=None):
+    # Text typed into YouTube Create. Spoken/sung lines and the call to action are always kept in full.
+    # Leftover room goes first to the shot, then to the product facts. Nothing is cut in the middle (except a visual plan, which is trimmed).
+    # style = the dict from reel_styles.pick (None = the old plain behaviour).
+    st = style or {}
+    has_voice = st.get("voice_check", "strict") != "none"
+    visual = bool(st) and not st.get("dialogue", True)          # no-dialogue format: the shots ARE the video
+    tail = ""
+    if has_voice and st.get("spoken_cta", True):
+        tail = " The voiceover must END with these exact words: " + CTA_HI
     parts = [s.strip() for s in (scenes or "").split(";") if s.strip()]
-    demo = parts[-1].rstrip(" .") if parts else ""
+    if visual:
+        demo = ", then ".join(x.rstrip(" .") for x in parts)
+    else:
+        demo = parts[-1].rstrip(" .") if parts else ""
+    name, facts = _scrub_kids(name), _scrub_kids(facts)
     rule = PEOPLE.get(people, PEOPLE["none"])
     look = rule["look"] + " " + rule["ref"]
-    style = STYLE
-    if people != "none":        # the general style says "Animate only the product", which would forbid the model / hands
-        style = re.sub(r"Animate only the product\.?", "", style, flags=re.I).strip()
-    base = _clean(" ".join(x for x in [style, (extra or "").strip(), "Product: " + name + ".", look] if x))
-    voice = _clean("Voice: warm, upbeat and natural, like a friend sending a voice note, speaking everyday Hindi. "
-                   "Pronounce every word clearly and exactly as written, do not skip, merge or change any word. "
-                   "Voiceover: " + body.strip() + ("" if body.strip()[-1:] in ".?!\u0964" else "\u0964"))
-    room = MAX_PROMPT - len(base) - len(voice) - len(tail) - 6
+    if people == "pet":
+        look = re.sub(r"\bpet\b", _animal(name), look)
+    if st.get("adult_angle") and people in reel_styles.ADULT_LOOK:      # children's product shown with adults only
+        look = (look + " " + reel_styles.ADULT_LOOK[people]).strip()
+    if st.get("setting"):
+        look = look.replace("bright clean background", st["setting"]).replace("plain bright background", st["setting"])
+    if st and not st.get("use_base_style"):
+        style_txt = "Use the attached reference photo for the product's exact look. " + (st.get("yt_line") or "")
+    else:
+        style_txt = STYLE
+        if people != "none":     # the general style says "Animate only the product", which would forbid the model / hands
+            style_txt = re.sub(r"Animate only the product\.?", "", style_txt, flags=re.I).strip()
+        if st.get("look_extra"):
+            style_txt = (style_txt + " " + st["look_extra"]).strip()
+    base = _clean(" ".join(x for x in [style_txt, (extra or "").strip(), "Product: " + name + ".", look] if x))
+    overlay = _clean(st.get("overlay") or "")
+    if overlay:       # text on the video is wanted: remove every 'no text on screen' rule
+        base = re.sub(r",?\s*\bno (?:on-screen )?(?:text|captions|subtitles)(?: on screen)?\b", "", base, flags=re.I)
+        base = re.sub(r"\s+([,.])", r"\1", base)
+        base = re.sub(r"([,.])(?:\s*[,.])+", r"\1", base)
+    elif "no text" not in base.lower():
+        base = (base + " No text on screen.").strip()
+    if has_voice:
+        vline = st.get("voice_line") or DEFAULT_VOICE_LINE
+        b = (body or "").strip()
+        voice = _clean(vline + " Voiceover: " + b + ("" if b[-1:] in ".?!\u0964" else "\u0964"))
+    else:
+        voice = _clean(st.get("audio_line") or "Voice: NO voice, no talking. Music only.")   # starts with 'Voice:' so promptfit never cuts it
+    room = MAX_PROMPT - len(base) - len(voice) - len(tail) - (len(overlay) + 1 if overlay else 0) - 6
     shot = _clean("Shot: " + demo + ".") if demo else ""
     if shot and len(shot) > room:
-        shot = ""
+        shot = _clean("Shot: " + _cut(demo, room - 8) + ".") if (visual and room > 60) else ""
     if shot:
         room -= len(shot) + 1
     fact = _clean("Facts: " + facts + ".") if facts else ""
     if fact and len(fact) > room:
         fact = ""
     mid = " ".join(x for x in [fact, shot] if x)
-    return promptfit.fit(_clean(base + " " + mid + " " + voice + tail), MAX_PROMPT)   # hard cap, never cuts voice/CTA
+    return promptfit.fit(_clean(base + " " + mid + (" " + overlay if overlay else "") + " " + voice + tail), MAX_PROMPT)   # hard cap, never cuts voice/CTA
 
 
-def make_script(p, verbose=False):
+# ------------------------------------------------- formats without dialogue ----
+def _lyric_issues(lyric, lyric_hi, eng=()):
+    issues = []
+    n = len(_words(lyric))
+    if n < 4 or n > 10:
+        issues.append("lyric has %d words (need 4 to 10)" % n)
+    if any(ord(ch) > 127 for ch in lyric):
+        issues.append("lyric must use plain English letters")
+    b = _banned(lyric)
+    if b:
+        issues.append("banned word: " + b)
+    toks = re.findall(r"[\u0900-\u0963\u0966-\u097F]+|[A-Za-z']+", lyric_hi)
+    dev = [t for t in toks if "\u0900" <= t[0] <= "\u097F"]
+    if not toks or len(dev) / len(toks) < 0.4:
+        issues.append("lyric_hi: Hindi words must be in Devanagari")
+    latin = set(t.lower() for t in toks if not ("\u0900" <= t[0] <= "\u097F"))
+    for w in sorted(set(x.lower() for x in _words(lyric)) & set(eng)):
+        if w not in latin:
+            issues.append("keep the English word '%s' in Latin letters in lyric_hi" % w)
+    return issues
+
+
+def _visual_plan(p, r, st, notes, mode, avoid=""):
+    """AI step for formats without dialogue: the shots (and, for a jingle, one sung line) + an opening line for the caption."""
+    jingle = st["voice"] == "jingle"
+    scene = st.get("scene_rule") or PEOPLE.get(mode, PEOPLE["none"])["scene"]
+    f = [str(x) for x in r.get("features", []) if str(x).strip()]
+    facts = (("VERIFIED FACTS (the ONLY product claims you may make): " + "; ".join(f) + ". ") if f else
+             "No special product feature is verified: show only what the product is and simple handling (hold, turn, flip). ")
+    prompt = (
+        "You are a creative director planning a 10 second vertical Instagram Reel for an Indian affiliate product. "
+        "This reel has NO spoken lines" + (" except ONE short sung line (the lyric)" if jingle else "") + ".\n"
+        "PRODUCT: " + p["name"] + "\nDETAILS: " + (p["description"] or "none") + "\n" + _visible_line(p) +
+        "RESEARCH: " + json.dumps(r, ensure_ascii=False) + "\n" + facts +
+        "Anything else in RESEARCH is background, never a claim about the product. Never invent a feature, material, size, count or ability, "
+        "and never show a use the page does not support. Never mention price, discount, 'best' or 'guaranteed'. No child, baby, kid or bachha.\n"
+        "FORMAT: " + st["plan"] + "\n" + st["ad_brief"] + "\n"
+        "WHAT THE CAMERA SHOWS: " + scene + "\n"
+        "LOOK: " + st["setting"] + "; camera: " + st["camera"] + "; " + st["mood"] + " mood.\n"
+        + (("OPTIONAL TREND IDEAS (use one ONLY if it fits naturally): " + st["trend"] + "\n") if st.get("trend") else "")
+        + (("THE CREATOR'S OWN NOTES (follow these first):\n" + notes + "\n") if notes else "") + avoid +
+        "Return JSON: {\"shots\": \"2 to 3 short shot descriptions separated by semicolons, plain English, under 190 characters in total, no double quotes\", "
+        "\"caption_hook\": \"one short relatable Hinglish line in English letters (4 to 12 words) that could open the Instagram caption, no price, no claims\""
+        + (", \"lyric\": \"ONE catchy line to be SUNG, 4 to 9 words, Hinglish in English letters, about what it is or the small joy of using it\", "
+           "\"lyric_hi\": \"the same line in MIXED script: Hindi words in Devanagari, every English word (product words, DM, link) stays in Latin letters\"" if jingle else "")
+        + "}"
+    )
+
+    def validate(text):
+        try:
+            data = json.loads(text)
+            need = ["shots", "caption_hook"] + (["lyric", "lyric_hi"] if jingle else [])
+            for k in need:
+                if not str(data.get(k, "")).strip():
+                    return "missing '" + k + "'"
+        except Exception:
+            return "not valid JSON"
+        return None
+    return _gen_json(prompt, validate)
+
+
+def _visual_script(p, r, st, notes, mode, verbose=False):
+    """Script for the formats without dialogue (music only, ASMR, silent, animation, how-to, jingle)."""
+    eng = set(w for w in re.findall(r"[a-z]{4,}", (p["name"] + " " + str(r.get("plain_name", ""))).lower()) if w not in HINDI)
+    jingle = st["voice"] == "jingle"
+    plan, avoid = None, ""
+    for attempt in range(2):
+        try:
+            d = _visual_plan(p, r, st, notes, mode, avoid)
+        except Exception as e:
+            print("  [script] visual plan could not be written:", str(e)[:100])
+            break
+        shots = _clean(str(d.get("shots", "")))
+        hook = _clean(str(d.get("caption_hook", "")))
+        lyric = _end(str(d.get("lyric", ""))) if jingle else ""
+        lyric_hi = _end_hi(str(d.get("lyric_hi", ""))) if jingle else ""
+        issues = []
+        b = _banned(shots + " " + hook)
+        if b:
+            issues.append("banned word: " + b)
+        if jingle:
+            issues += _lyric_issues(lyric, lyric_hi, eng)
+        bad = []
+        try:
+            texts = [t for t in (shots, hook, lyric) if t]
+            for ok, bl in claims_check_many(p, r, texts):
+                if not ok:
+                    bad += bl
+        except Exception as e:
+            print("  [script] fact check of the plan could not run:", str(e)[:100])
+        if not issues and not bad:
+            plan = {"shots": shots, "hook": hook, "lyric": lyric, "lyric_hi": lyric_hi}
+            break
+        print("  [script] visual plan rejected: " + "; ".join(issues + bad)[:220])
+        avoid = ("\nThe last attempt was rejected: " + "; ".join(issues + bad)[:300] +
+                 ". Fix this: show and claim only what is verified.\n")
+    if not plan:
+        plain = str(r.get("plain_name") or p["name"])
+        plan = {"shots": _clean(st["shots"].replace("{p}", plain)), "hook": "", "lyric": "", "lyric_hi": ""}
+        print("  [script] using the safe built-in shots for this format")
+        if jingle:
+            st = reel_styles.as_music_only(st)
+            print("  [script] no safe sung line could be written -> making this one with music only")
+            jingle = False
+    facts = _yt_facts(p, r)
+    body, body_hi = plan["lyric"], plan["lyric_hi"]
+    print("  [script] shots:", plan["shots"])
+    if jingle:
+        print("  [script] sung line:", body)
+    return {
+        "body": body,
+        "voiceover": ("(sung) " + body) if jingle else "(no voice: %s)" % st["label"],
+        "body_hi": body_hi,
+        "cta_hi": "",
+        "voice_hi": body_hi,
+        "cta": "",
+        "meaning": plan["shots"],
+        "scenes": plan["shots"],
+        "research": r,
+        "facts": facts,
+        "people": mode,
+        "caption_hook": plan["hook"],
+        "style": st,
+        "voice_check": st["voice_check"],
+        "spoken_cta": False,
+        "yt_prompt": _build_prompt(p["name"], body_hi, plan["shots"], facts=facts, people=mode, style=st),
+    }
+
+
+# ------------------------------------------------------------------- script ----
+def make_script(p, verbose=False, remember=True):
     notes = _style_notes()
     import image_facts
     image_facts.read(p)          # read the specs/features printed on the product's own pictures first
@@ -511,12 +851,41 @@ def make_script(p, verbose=False):
     except Exception as e:
         print("  [script] early fact check skipped:", str(e)[:100])
     mode, why = _people_mode(p, r)
+    kids = bool(KIDS.search(p["name"] + " " + (p.get("description") or "")))
+    _vt_mode = {"hands": "hands", "person": "adult_model", "pet": "pet", "animated": "none"}.get(VIDEO_TYPE)
+    adult_angle = False
+    if _vt_mode:                                          # the video type chosen on the control page decides who appears
+        mode, why = _vt_mode, "chosen on the control page (video type: %s)" % VIDEO_TYPE
+        if kids and _vt_mode == "pet":
+            print("  [script] video type 'pet' ignored: child/baby product, no pet scene makes sense")
+            mode, why = "none", "child/baby product: no people (the video app refuses child content)"
+        elif kids and _vt_mode != "none":
+            # Do NOT drop the people. Never show a child, but an ADULT (hands / a college-age model) can use it as a fun gadget.
+            adult_angle = True
+            why += " | child product -> adults only, shown as a fun desk toy / collectible"
+            print("  [script] child product with video type '%s': using the ADULT angle (grown-ups use it as a fun gadget, no children shown)" % VIDEO_TYPE)
+    style = reel_styles.pick(p, r, mode, kids, adult_angle=adult_angle)           # voice / video job / ad level, different from the last videos
+    if style.get("adult_angle"):
+        r["audience"] = "young adults (college students, young professionals) and people looking for a fun gift for a friend"
+        r["people_reason"] = why
+    mode = PEOPLE_FORCE if PEOPLE_FORCE in PEOPLE else style["people"]
+    style["people"] = mode
     r["people"] = mode
-    print("  [script] people in the video: %s (%s)" % (mode, why))
+    style["overlay"] = _overlay_line(p, r) if TEXT_OVERLAY else ""
+    print("  [script] control page: video type=%s | spoken CTA=%s | text on video=%s"
+          % (VIDEO_TYPE, "yes" if style.get("spoken_cta") else "no", "yes" if style["overlay"] else "no"))
+    print("  [script] FORMAT: %s | voice: %s | job: %s | ad level: %s | %s, %s, %s mood"
+          % (style["label"], style["voice"], style["job"], style["ad"], style["setting"], style["camera"], style["mood"]))
+    print("  [script] people in the video: %s (product rule: %s)" % (mode, why))
+    if not style["dialogue"]:
+        out = _visual_script(p, r, style, notes, mode, verbose)
+        if remember:
+            reel_styles.record(out["style"])
+        return out
     key_tokens = set(re.findall(r"[a-z]{4,}", (p["name"] + " " + str(r.get("plain_name", "")) + " "
                                                 + " ".join(str(x) for x in r.get("features", []))).lower()))
     eng = set(w for w in re.findall(r"[a-z]{4,}", (p["name"] + " " + str(r.get("plain_name", ""))).lower()) if w not in HINDI)
-    cands = candidates(p, r, notes)
+    cands = candidates(p, r, notes, style)
     for c in cands:
         c["issues"] = hard_issues(c["line1"], c["line2"], c["hi1"], c["hi2"], eng)
         c["score"] = _score(c, key_tokens)
@@ -527,7 +896,7 @@ def make_script(p, verbose=False):
         for c in cands:
             print("   - [%s] %s %s  (score %d)%s" % (c["hook_type"], c["line1"], c["line2"], c["score"],
                                                     "  REJECTED: " + "; ".join(c["issues"]) if c["issues"] else ""))
-    final = edit(p, r, pool, notes)
+    final = edit(p, r, pool, notes, style)
     chosen = pool[0]
     if final:
         bad = hard_issues(final["line1"], final["line2"], final["hi1"], final["hi2"], eng)
@@ -540,6 +909,7 @@ def make_script(p, verbose=False):
     # Fact check against the photo and the page: a script must not claim a print, colour or count that is not really there.
     # All candidates are checked in ONE AI call; the first one that passes is used.
     fact_ok_seen = []
+
     def grounded(cs):
         res = claims_check_many(p, r, [c["line1"] + " " + c["line2"] + " " + c.get("english", "") for c in cs])
         for c, (ok, bad) in zip(cs, res):
@@ -548,10 +918,10 @@ def make_script(p, verbose=False):
                 print("  [script] rejected (" + c["line1"][:40] + "...): the photo/page does not support: " + "; ".join(bad or ["(unclear)"]))
         okc = [c for c in cs if c["ok_facts"]]
         fact_ok_seen.extend(okc)
-        for c, (good_, why_) in zip(okc, coherence_many(p, r, okc)):
+        for c, (good_, why_) in zip(okc, coherence_many(p, r, okc, style["answer_rule"])):
             c["coherent"], c["why_incoherent"] = good_, why_
             if not good_:
-                print("  [script] rejected (" + c["line1"][:40] + "...): line 2 does not make sense after line 1: " + (why_ or "(no reason)"))
+                print("  [script] rejected (" + c["line1"][:40] + "...): the two lines do not work together: " + (why_ or "(no reason)"))
         return next((c for c in okc if c.get("coherent", True)), None)
     tries, seen_lines = [], set()
     for c in [chosen] + good + pool:
@@ -569,8 +939,9 @@ def make_script(p, verbose=False):
             extra_note += "\nNEVER claim: " + "; ".join(wrong) + ". Use ONLY what the photo description and page details say."
         nonsense = sorted({c.get("why_incoherent", "") for c in fact_ok_seen if c.get("why_incoherent")})
         if nonsense:
-            extra_note += "\nEarlier ideas were rejected because line 2 did not answer line 1: " + "; ".join(nonsense)[:400] + ". Make line 2 a direct answer to line 1."
-        fresh = candidates(p, r, extra_note.strip())
+            extra_note += ("\nEarlier ideas were rejected because the two lines did not work together: " + "; ".join(nonsense)[:400] + "."
+                           + (" Make line 2 a direct answer to line 1." if style["answer_rule"] else " Make line 2 a clear punchline, twist or reveal after line 1."))
+        fresh = candidates(p, r, extra_note.strip(), style)
         for c in fresh:
             c["issues"] = hard_issues(c["line1"], c["line2"], c["hi1"], c["hi2"], eng)
             c["score"] = _score(c, key_tokens)
@@ -587,34 +958,27 @@ def make_script(p, verbose=False):
     body_hi = _clean(chosen["hi1"] + " " + chosen["hi2"])
     scenes = _clean("; ".join([chosen["scene1"], chosen["scene2"]]))
     print("  [script] meaning:", chosen.get("english") or "(not given)")
-    # Facts for YouTube: each research feature must be proven by the page (code checks + a quoted proof) and the AI must really have run.
-    feats = [_clean(str(x)) for x in r.get("features", []) if str(x).strip()]
-    feats = [f for f in feats if f and len(f) <= 95 and not _banned(f)]
-    facts = ""
-    if feats:
-        good_f = []
-        for f, res_ in zip(feats, claims_check_many(p, r, feats, detail=True)):
-            if res_["ok"] and res_["ai"]:
-                good_f.append(f)
-            else:
-                print("  [script] fact dropped (%s): %s" % ("; ".join(res_["unsupported"]) or "AI check could not run", f))
-        facts = "; ".join(good_f[:2])
-        if len(facts) > 95:
-            facts = good_f[0]
-    print("  [script] facts for YouTube:", facts)
+    facts = _yt_facts(p, r)
+    spoken = bool(style["spoken_cta"])      # pure-content videos do not SAY the call to action: it goes in the caption
+    if remember:
+        reel_styles.record(style)
     return {
         "body": body,
-        "voiceover": body + " " + CTA,
+        "voiceover": body + ((" " + CTA) if spoken else ""),
         "body_hi": body_hi,                 # what the VOICE reads (Devanagari)
-        "cta_hi": CTA_HI,
-        "voice_hi": body_hi + " " + CTA_HI,
-        "cta": CTA,
+        "cta_hi": CTA_HI if spoken else "",
+        "voice_hi": body_hi + ((" " + CTA_HI) if spoken else ""),
+        "cta": CTA if spoken else "",
         "meaning": chosen.get("english", ""),
         "scenes": scenes,
         "research": r,
         "facts": facts,
         "people": mode,
-        "yt_prompt": _build_prompt(p["name"], body_hi, scenes, facts=facts, people=mode),
+        "caption_hook": "",
+        "style": style,
+        "voice_check": style["voice_check"],
+        "spoken_cta": spoken,
+        "yt_prompt": _build_prompt(p["name"], body_hi, scenes, facts=facts, people=mode, style=style),
     }
 
 
@@ -622,7 +986,7 @@ def retry_prompt(p, script, reason):
     """Prompt for the second attempt: same script, plus what went wrong last time."""
     extra = "IMPORTANT, last video failed because: " + _clean(str(reason))[:160] + ". Fix this. "
     return _build_prompt(p["name"], script.get("body_hi") or script["body"], script["scenes"], extra, facts=script.get("facts", ""),
-                         people=script.get("people", "none"))
+                         people=script.get("people", "none"), style=script.get("style"))
 
 
 if __name__ == "__main__":
@@ -635,8 +999,9 @@ if __name__ == "__main__":
         print('Use: python script_writer.py "Product name" "short details from the page"')
         sys.exit(0)
     prod = {"name": sys.argv[1], "description": sys.argv[2] if len(sys.argv) > 2 else ""}
-    out = make_script(prod, verbose=True)
-    print("\nPEOPLE    :", out["people"])
+    out = make_script(prod, verbose=True, remember=False)
+    print("\nFORMAT    :", out["style"]["label"], "| voice:", out["style"]["voice"], "| ad level:", out["style"]["ad"])
+    print("PEOPLE    :", out["people"])
     print("VOICEOVER :", out["voiceover"])
     print("VOICE TEXT (Devanagari, what the video voice reads):", out["voice_hi"])
     print("MEANING   :", out["meaning"])

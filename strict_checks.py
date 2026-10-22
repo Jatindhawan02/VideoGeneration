@@ -195,9 +195,10 @@ def check_pronunciation(heard, expected_body, expected_cta=""):
             wrong.append((e, h))
     body_score = body_ok / body_n if body_n else 1.0
     cta_score = cta_ok / cta_n if cta_n else 1.0
+    english_wrong = [(e, h) for e, h in wrong if not is_dev(e) and len(sound(e)) >= 3]   # an ENGLISH word (pink, zip, sponge) said wrongly
     return {"ok": body_score >= PRON_MIN_BODY, "cta_ok": cta_score >= PRON_MIN_CTA,
             "body_score": round(body_score, 2), "cta_score": round(cta_score, 2),
-            "wrong": wrong, "heard_words": len(H)}
+            "wrong": wrong, "english_wrong": english_wrong, "heard_words": len(H)}
 
 
 def explain(res):
@@ -271,7 +272,7 @@ def _gen(contents, validate):
             llm.ORDER = old
 
 
-def product_match(ref_path, video_path, product, ref_paths=None):
+def product_match(ref_path, video_path, product, ref_paths=None, loose=False):
     """Returns (True/False/None, reason). None = could not check.
     Looks at the WHOLE video against ALL reference pictures (ref_paths, else just ref_path); see product_match.py."""
     refs = [p for p in (ref_paths or [ref_path]) if p and os.path.exists(p)]
@@ -285,7 +286,7 @@ def product_match(ref_path, video_path, product, ref_paths=None):
         if order and old is not None:
             llm_mod.ORDER = [x.strip().lower() for x in order.split(",") if x.strip()]
         import product_match as pm
-        return pm.check(video_path, refs, product)
+        return pm.check(video_path, refs, product, loose=loose)
     except Exception as e:
         return None, "product comparison could not run: " + str(e)[:100]
     finally:
@@ -294,11 +295,22 @@ def product_match(ref_path, video_path, product, ref_paths=None):
 
 
 # ------------------------------------------------------------------- apply ----
+STRICT_ENGLISH = os.getenv("STRICT_ENGLISH", "1") != "0"     # one wrongly said ENGLISH word (pink, zip, sponge ...) fails the video by itself
+
+
 def apply(report, video_path, ref_path, p, script, ref_paths=None):
-    """Tighten the verdict of verify_video.py with the two strict checks."""
+    """Tighten the verdict of verify_video.py with the two strict checks.
+    The format of the reel (script["style"]) decides which checks make sense:
+      voice_check 'strict'   -> every spoken word is compared with the script (talk / narrator formats)
+      voice_check 'presence' -> a sung line must exist, the words are NOT compared (jingle)
+      voice_check 'none'     -> music / ASMR / silent format: no speech check at all
+      loose_product          -> animation: the 'same product' judge is told that a cartoon / clay look is expected"""
     checks = report.setdefault("checks", {})
     theirs = dict(checks)
     problems, notes = [], []
+    style = script.get("style") or {}
+    vc = script.get("voice_check") or style.get("voice_check") or "strict"
+    loose = bool(style.get("loose_product"))
 
     heard = (report.get("transcript") or "").strip()
     if script.get("body_hi"):
@@ -306,7 +318,12 @@ def apply(report, video_path, ref_path, p, script, ref_paths=None):
     else:
         exp_body, exp_cta = script.get("body", ""), script.get("cta", "")
     pron = None
-    if len(tokens(heard)) >= 4 and exp_body:
+    if vc != "strict":
+        checks["pronunciation"] = None
+        print("  [strict] voice words not compared with a script (%s format, voice check: %s)" % (style.get("label") or "?", vc))
+        if vc == "presence":
+            notes.append("sung line: only checked that a voice exists, listen to the words yourself")
+    elif len(tokens(heard)) >= 4 and exp_body:
         res = check_pronunciation(heard, exp_body, exp_cta)
         pron = res["ok"]
         checks["pronunciation"] = res["ok"]
@@ -317,13 +334,17 @@ def apply(report, video_path, ref_path, p, script, ref_paths=None):
             print("  [strict] changed words:", explain(res))
         if not res["ok"]:
             problems.append("the voice changed or mispronounced words: " + explain(res))
+        if STRICT_ENGLISH and res["ok"] and res.get("english_wrong"):
+            checks["english_words"] = False
+            problems.append("an English word was said wrongly: " + "; ".join(
+                "'%s' -> %s" % (e, ("'%s'" % h) if h else "not said") for e, h in res["english_wrong"][:4]))
         if not res["cta_ok"]:
             problems.append("the call to action (link / comment / DM) was not said clearly")
     else:
         checks["pronunciation"] = None
         notes.append("could not transcribe the voice: listen to it yourself")
 
-    same, why = product_match(ref_path, video_path, p, ref_paths)
+    same, why = product_match(ref_path, video_path, p, ref_paths, loose=loose)
     checks["same_product"] = same
     print("  [strict] product match:", {True: "SAME", False: "DIFFERENT", None: "not checked"}[same], "-", why[:240])
     if same is False:
@@ -332,16 +353,22 @@ def apply(report, video_path, ref_path, p, script, ref_paths=None):
         notes.append(why)
 
     ignore = set()
-    if pron is not None:
+    if pron is not None or vc != "strict":
         ignore |= {"cta_spoken", "matches_script", "voice_is_hinglish"}
+    if vc == "none":
+        ignore.add("has_speech")
+    if not script.get("spoken_cta", True):
+        ignore.add("cta_spoken")
     failed = [k for k, v in theirs.items() if v is False and k not in ignore]
     report["pass"] = not failed and not problems
     if report["pass"]:
         ran = []
         if pron:
             ran.append("voice words match the script")
+        elif vc != "strict":
+            ran.append("no word check needed (%s format)" % (style.get("label") or vc))
         if same:
-            ran.append("product matches the photo")
+            ran.append("product matches the photo" + (" (animation: loose match)" if loose else ""))
         report["reason"] = ("; ".join(ran) or "NOT VERIFIED by the strict checks") + ((" | NOTE: " + "; ".join(notes)) if notes else "")
     else:
         report["reason"] = "; ".join(problems + (["failed: " + ", ".join(failed)] if failed else []))
