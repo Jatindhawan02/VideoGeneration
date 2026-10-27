@@ -33,6 +33,15 @@ Rules:
 - Never reply fail just because a button or text field is not visible yet: first wait, swipe, or tap options like Create/Continue/Next to explore. fail is only for login/OTP/CAPTCHA/payment/account warnings or when truly stuck after many tries."""
 
 FORBIDDEN = []      # words in a button label that must never be tapped (set temporarily by supervisor.assist)
+STEP_HOOK = None    # set by user_feedback.py: returns the notes you typed on the page since the last call ("" if none)
+CURRENT_SCOPE = [""]  # first part of the running task's name ("ig" for ig_open ...): your notes are saved under it
+
+
+def _step_note():
+    try:
+        return (STEP_HOOK() or "") if STEP_HOOK else ""
+    except Exception:
+        return ""
 MEM_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "memory")
 _BOUNDS = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
 
@@ -84,12 +93,43 @@ def _parse_raw(text):
     raise ValueError("not valid JSON")
 
 
-def _has_text_field(d):
-    """True if an editable text box exists on the current screen (Appium, free, no AI)."""
+def _keyboard_shown(d):
+    """True if the on-screen keyboard is open. A keyboard means a field is focused, even if the app (Instagram) does not
+    report that field as an EditText."""
     try:
-        return bool(d.find_elements("class name", "android.widget.EditText"))
+        if d.is_keyboard_shown():
+            return True
+    except Exception:
+        pass
+    try:       # Appium sometimes answers False although the keyboard is open: ask Android itself too
+        out = phone.adb("shell", "dumpsys input_method") or ""
+        return ("mInputShown=true" in out) or ("mIsInputViewShown=true" in out)
+    except Exception:
+        return False
+
+
+def reset_ime():
+    """Appium can leave its own HIDDEN keyboard selected: then tapping a field never opens a keyboard. Go back to the phone's real keyboard
+    and make sure the on-screen keyboard is allowed to show."""
+    global _ime_reset_done
+    try:
+        phone.adb("shell", "ime reset")
+        phone.adb("shell", "settings put secure show_ime_with_hard_keyboard 1")
+        time.sleep(1)
+        _ime_reset_done = True
+    except Exception as e:
+        print("  (could not reset the keyboard:", str(e)[:80], ")")
+
+
+def _has_text_field(d):
+    """True if text can be typed on the current screen (Appium, free, no AI).
+    Instagram's caption box is a custom view, not an EditText, so an open keyboard counts as a focused text field too."""
+    try:
+        if d.find_elements("xpath", "//*[contains(@class,'EditText')]"):      # EditText and its subclasses (AppCompatEditText ...)
+            return True
     except Exception:
         return True      # cannot check -> do not block
+    return _keyboard_shown(d)
 
 
 def _can_type(history):
@@ -354,6 +394,11 @@ def _run(d, goal, max_steps, key, texts, notes, trace, block_bottom=False):
 
     # 2) AI loop (also confirms the goal is done after a replay)
     for i in range(max_steps):
+        extra = _step_note()
+        if extra:
+            print("  [note] your note reaches the bot before this step: " + extra)
+            goal = goal + "\nIMPORTANT, THE USER TELLS YOU NOW: " + extra + " Follow this before anything else."
+            history.append({"action": "user_note", "why": extra})
         png = phone.screenshot(d)
         h = hashlib.md5(png).hexdigest()
         same = same + 1 if h == last_hash else 0
@@ -370,6 +415,12 @@ def _run(d, goal, max_steps, key, texts, notes, trace, block_bottom=False):
             time.sleep(8)
             continue
         errs = 0
+        late = _step_note()
+        if late:      # you sent a note while the AI was thinking: the action it planned BEFORE your note is NOT done
+            print("  [note] your note arrived while the AI was deciding -> the planned action is dropped: " + late)
+            goal = goal + "\nIMPORTANT, THE USER TELLS YOU NOW: " + late + " Follow this before anything else."
+            history.append({"action": "user_note", "why": late})
+            continue
         history.append(a)
         if a.get("action") not in ("done", "fail"):
             trace.append(a)
@@ -474,14 +525,17 @@ def _verify_typed(d, text):
     """True = the text is visible in a text box, False = text boxes exist but it is not there, None = cannot tell."""
     probe = _norm(text)[:12]
     try:
-        els = d.find_elements("class name", "android.widget.EditText")
-        if not els:
-            return None
+        els = d.find_elements("xpath", "//*[contains(@class,'EditText')]")
         for e in els:
             v = _norm(e.text or e.get_attribute("text") or "")
             if probe and probe in v:
                 return True
-        return False
+        # custom caption boxes (Instagram) are not EditText: look for the typed text in any element of the screen
+        if probe:
+            for n in _ui_nodes(d):
+                if probe in _norm((n["text"] or "") + " " + (n["desc"] or "")):
+                    return True
+        return False if els else None
     except Exception:
         return None
 
@@ -525,6 +579,61 @@ def _type_text(d, text):
     return _verify_typed(d, text)
 
 
+# ------------------------------------------------------------ mistakes ----
+# memory/mistakes.json: every mistake the bot made (or you corrected), per scope ("ig" = all Instagram tasks).
+# They are put at the top of the AI's instructions on EVERY later run. Open the file to read, edit or delete lines.
+MISTAKES = os.path.join(MEM_DIR, "mistakes.json")
+
+
+def _read_mistakes():
+    try:
+        with open(MISTAKES, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def record_mistake(scope, what, rule=""):
+    """Write a mistake down. `rule` = what to do instead (this is what the AI will read). Same rule again = counted, not duplicated."""
+    try:
+        data = _read_mistakes()
+        items = data.setdefault(scope, [])
+        text = re.sub(r"\s+", " ", (rule or what)).strip()[:220]
+        now = time.strftime("%Y-%m-%d %H:%M")
+        for it in items:
+            if it["rule"].lower() == text.lower():
+                it["count"] = it.get("count", 1) + 1
+                it["last"] = now
+                break
+        else:
+            items.append({"rule": text, "what": re.sub(r"\s+", " ", what).strip()[:220], "count": 1, "last": now})
+        data[scope] = sorted(items, key=lambda x: x["last"])[-12:]
+        os.makedirs(MEM_DIR, exist_ok=True)
+        with open(MISTAKES, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=1)
+        print("  [memory] mistake written down: " + text)
+    except Exception as e:
+        print("  could not write the mistake:", str(e)[:80])
+
+
+def mistake_text(nk):
+    data = _read_mistakes()
+    rules = []
+    for scope in ("all", (nk or "").split("_")[0]):
+        for it in data.get(scope, []):
+            rules.append("- %s%s" % (it["rule"], " (happened %d times)" % it["count"] if it.get("count", 1) > 1 else ""))
+    return ("MISTAKES MADE BEFORE - NEVER REPEAT THEM:\n" + "\n".join(rules)[:1200]) if rules else ""
+
+
+def forget_flow(key):
+    """Delete a saved step list (memory/<key>.json), e.g. when it led to a wrong screen."""
+    try:
+        os.remove(os.path.join(MEM_DIR, key + ".json"))
+        print("  [memory] saved steps '%s' deleted (they were wrong)" % key)
+    except Exception:
+        pass
+
+
 # ------------------------------------------------------------- lessons ----
 # Short plain-text tips the AI writes for itself after a run (notes/<task>.txt).
 # They are shown to the AI on the next run, so it does not rediscover the same things.
@@ -549,7 +658,7 @@ def _read(path, limit):
 
 
 def _load_notes(nk):
-    parts = [_read(PLAYBOOK, 1500), _read(os.path.join(NOTES_DIR, nk + ".txt"), 1500)]
+    parts = [mistake_text(nk), _read(PLAYBOOK, 1500), _read(os.path.join(NOTES_DIR, nk + ".txt"), 1500)]
     return "\n".join(p for p in parts if p)
 
 
@@ -584,6 +693,7 @@ def run_task(d, goal, max_steps=40, key=None, texts=None, block_bottom=False):
     """key: name for this task (enables exact-step replay). texts: texts to type, in order (e.g. [prompt]).
     Lessons (what worked / what to avoid) are remembered for every task, with or without a key."""
     nk = _notes_key(goal, key)
+    CURRENT_SCOPE[0] = nk.split("_")[0]
     notes = _load_notes(nk)
     if notes:
         print(f"  using lessons from earlier runs ({nk})")

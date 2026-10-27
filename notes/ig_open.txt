@@ -1,0 +1,3 @@
+Tap the create plus icon and ensure the REEL tab is selected at the bottom.
+If a draft prompt appears, tap Start new video to discard the draft and reach the gallery picker.
+The gallery picker is active when you see a grid of recent media with REEL selected.

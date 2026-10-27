@@ -5,7 +5,9 @@ from config import SERIAL, APPIUM_URL
 
 def adb(*args):
     cmd = ["adb"] + (["-s", SERIAL] if SERIAL else []) + list(args)
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=120).stdout.strip()
+    # utf-8 + errors="replace": on Windows the default code page (cp1252) crashes on some adb output (for example dumpsys)
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+    return (r.stdout or "").strip()
 
 def _real_size(d):
     import io
@@ -42,10 +44,13 @@ def screenshot(d):
 
 def _alive(d):
     try:
-        d.current_package
+        d.get_window_rect()
         return True
-    except Exception:
-        return False
+    except Exception as e:
+        msg = str(e).lower()
+        dead = ("invalid session" in msg or "no such session" in msg or "terminated" in msg
+                or "not started" in msg or "connection" in msg or "max retries" in msg or "refused" in msg)
+        return not dead
 
 
 def heal(d):
@@ -104,9 +109,8 @@ def swipe(d, direction):
         "direction": direction, "percent": 0.75})
 
 def type_text(d, text):
-    # clipboard paste handles emojis / Hindi
-    d.set_clipboard_text(text)
-    d.press_keycode(279)  # KEYCODE_PASTE
+    import agent
+    return agent._type_text(d, text)
 
 def push_media(local_path, remote_path):
     adb("push", local_path, remote_path)

@@ -5,7 +5,7 @@ Use: python main_link.py "PRODUCT_LINK"           (make video + caption only, yo
                                                    ONLY if every video check passed)
 """
 import io, os, re, sys, json, time
-import phone, agent, llm, find_product, yt_flow, script_writer, verify_video, supervisor, strict_checks, image_facts, factcheck
+import phone, agent, llm, post_guard, auto_dm, find_product, yt_flow, script_writer, verify_video, supervisor, strict_checks, image_facts, factcheck
 from PIL import Image, ImageDraw, ImageFont
 from google.genai import types
 from config import PKG, SHORT_PROMPT_STYLE
@@ -22,6 +22,9 @@ STYLE = (SHORT_PROMPT_STYLE or "").strip().strip('"').strip("'")
 if STYLE.upper().startswith("SHORT_PROMPT_STYLE="):      # .env/config line was read with its name included
     STYLE = STYLE.split("=", 1)[1].strip()
 
+# Where the product page is read: web = in a browser on the PC (the phone stays free), phone = in the Meesho app (old way),
+# auto = the PC browser first, and the phone only if that fails. Set SCRAPE in .env; the control page uses web for "prompt + caption" mode.
+SCRAPE = (os.getenv("SCRAPE", "") or "phone").strip().lower()
 YT_PKG = os.getenv("YTCREATE_PKG", "com.google.android.apps.youtube.producer")   # YouTube Create app
 VID_FOLDERS = ["/sdcard/Movies", "/sdcard/DCIM/Camera", "/sdcard/Download", "/sdcard/DCIM", "/sdcard/Pictures"]
 
@@ -71,6 +74,8 @@ GALLERY_BOX = {"box": None}     # pixel box (x1, y1, x2, y2) of the big product 
 def crop_product(im):
     """Crop a screenshot (PIL image) to the product picture. Uses the real position found on screen;
     only if that is unknown it falls back to the old fixed area (which misses the picture when a page has banners on top)."""
+    if GALLERY_BOX.get("full"):          # pictures downloaded from the web page: already only the product, nothing to crop
+        return im
     w, h = im.size
     b = GALLERY_BOX.get("box")
     if b:
@@ -537,7 +542,7 @@ def create_video(d, p, shot_remote, prompt=None, n_images=1):
     return yt_flow.run(d, prompt, n_images)
 
 
-LAST_POST = {"caption": "", "tags": ""}
+LAST_POST = {"caption": "", "tags": "", "search": []}
 
 
 def _caption_ready():
@@ -554,7 +559,7 @@ def write_post(out_dir, url, p, script=None, report=None, regen=False):
     if (script or {}).get("caption_hook"):
         tone += "A possible opening idea (rewrite freely, keep it natural): " + script["caption_hook"] + " "
     if script is not None and not script.get("spoken_cta", True):
-        tone += "The video does NOT say the call to action out loud, so the caption must carry it clearly at the end. "
+        tone += "The video does NOT say the call to action out loud: the program adds the 'Comment LINK' line at the end of the caption, so let your lines lead into it. "
     if tone:
         tone += "\n"
     prompt = (
@@ -564,26 +569,33 @@ def write_post(out_dir, url, p, script=None, report=None, regen=False):
         + (("What the product photo really shows (looks): " + p["visible"] + "\n") if p.get("visible") else "")
         + (("Specs read from the page: " + p["page_text"][:600] + "\n") if p.get("page_text") else "") +
         "Use ONLY these facts. Do not invent discounts, ratings, materials, sizes or claims.\n"
-        "Rules: simple Hinglish (Hindi in English letters), cute friendly tone, catchy first line, 2-3 short lines, "
-        "no price, no words like 'guaranteed' or 'best', at most 3 emojis.\n"
-        + tone + "Just before the last line add: (Affiliate link - I may earn a commission)\n"
-        "The caption must END with the exact line: " + cta_line + "\n"
-        "Return JSON: {\"caption\": \"...\", \"hashtags\": [\"#...\"]} with 6 to 8 hashtags including #ad"
+        "Rules: simple Hinglish (Hindi in English letters), cute friendly tone, no price, no words like 'guaranteed' or 'best', "
+        "at most 3 emojis.\n"
+        + tone +
+        "caption = ONLY the opening: line 1 is a catchy hook, then 1 or 2 short lines (what the product is, or one relatable moment). "
+        "Do NOT write the affiliate disclosure, the call to action, hashtags or search phrases: the program adds them.\n"
+        "hashtags = 5 to 8 hashtags about this product and Meesho. Do not use #ad.\n"
+        "search_phrases = 8 to 10 short things people type into Instagram search about this product: 2 to 6 words each, plain English, "
+        "a mix of (a) product searches, for example 'cute cat toys', (b) discovery phrases, for example 'Meesho finds' or 'cute finds', and "
+        "(c) 2 or 3 questions, for example 'where to find cute cat toys?'. No hashtags, no emoji, no price, no 'best', 'cheap' or 'offer'.\n"
+        "Return JSON: {\"caption\": \"...\", \"hashtags\": [\"#...\"], \"search_phrases\": [\"...\"]}"
     )
     if _caption_ready() and not regen:
         caption, tags, cta_line = LAST_POST["caption"], LAST_POST["tags"], LAST_POST.get("cta") or cta_line
     else:
-        caption, tags = "", ""
+        caption, tags, search = "", "", []
         try:
             data = json.loads(llm.generate([prompt]))
             caption = str(data.get("caption", "")).strip()
             h = data.get("hashtags", [])
             tags = " ".join(h) if isinstance(h, list) else str(h)
+            search = data.get("search_phrases", [])
         except Exception as e:
             print("  caption nahi bana:", str(e)[:150])
             caption = "(Caption nahi bana. Thodi der baad dobara try karo.)"
         LAST_POST["caption"], LAST_POST["tags"], LAST_POST["cta"] = caption, tags, cta_line
-    text = ("PRODUCT: " + p["name"] + "\nLINK: " + url + "\n\nCAPTION:\n" + caption + "\n\nHASHTAGS:\n" + tags + "\n")
+        LAST_POST["search"] = _search_phrases(search, p)
+    text = ("PRODUCT: " + p["name"] + "\nLINK: " + url + "\n\nCAPTION (exactly as it is posted):\n" + (build_instagram_caption() or caption) + "\n")
     if script:
         _st = script.get("style") or {}
         text += "\nREEL FORMAT: %s | voice: %s | job: %s | ad level: %s\n" % (_st.get("label"), _st.get("voice"), _st.get("job"), _st.get("ad"))
@@ -602,21 +614,72 @@ def write_post(out_dir, url, p, script=None, report=None, regen=False):
 
 CTA_LINE = "Comment LINK to get the link in your DM"
 DISCLOSURE = "(Affiliate link - I may earn a commission)"
+SHOW_AD_TAG = os.getenv("CAPTION_AD_TAG", "0").strip().lower() in ("1", "true", "yes", "on")             # off by default; CAPTION_AD_TAG=1 in .env adds #ad again
+SHOW_DISCLOSURE = os.getenv("CAPTION_DISCLOSURE", "0").strip().lower() in ("1", "true", "yes", "on")    # off by default; set CAPTION_DISCLOSURE=1 in .env to add the line again
+
+
+_SEARCH_BAD = re.compile(r"\b(best|cheap|cheapest|price|offer|offers|discount|sale|guaranteed|free|rs|inr)\b|[%\u20b9#]", re.I)
+_SEARCH_FILL = ["Meesho finds", "Meesho haul", "Meesho products", "cute finds", "Instagram finds", "online shopping finds",
+                "where to find cute stuff?"]
+
+
+def _search_phrases(raw, p=None):
+    """7 to 10 plain search phrases for the end of the caption (so the Reel can be found in Instagram search)."""
+    if isinstance(raw, str):
+        raw = re.split(r"[\n|;]+", raw)
+    out, seen = [], set()
+
+    def add(t):
+        t = re.sub(r"\s+", " ", str(t or "")).strip(" -*\u2022,.")
+        t = t.replace('"', "")
+        if not (2 <= len(t) <= 60) or _SEARCH_BAD.search(t) or any(ord(c) > 0x2000 for c in t):
+            return
+        if t.lower() in seen:
+            return
+        seen.add(t.lower())
+        out.append(t[:1].upper() + t[1:])
+    for t in (raw if isinstance(raw, list) else []):
+        add(t)
+    for t in _SEARCH_FILL:                                   # fewer than 7 usable phrases: fill up with safe general ones
+        if len(out) >= 7:
+            break
+        add(t)
+    return out[:10]
+
+
+def _hashtags(tags):
+    found = ["#" + t.lstrip("#") for t in re.findall(r"#?\w+", tags or "")]        # accepts "#a #b", "a, b" and lists joined by spaces
+    out, seen = [], set()
+    for t in found:
+        if len(t) > 1 and t.lower() not in seen and t.lower() != "#ad":
+            seen.add(t.lower())
+            out.append(t)
+    return out[:8] + (["#ad"] if SHOW_AD_TAG else [])
 
 
 def build_instagram_caption():
-    """Caption + hashtags exactly as they will be typed in Instagram. Returns None if the caption is not usable."""
+    """The caption exactly as it is typed in Instagram, always in this order:
+         hook line + 1-2 short lines (written by the AI)
+         (Affiliate link - I may earn a commission)   <- only when CAPTION_DISCLOSURE=1 in .env
+         Comment LINK ... (rotating wording; the auto-DM listens for "Comment LINK")
+         <blank line>
+         #hashtags (and #ad only when CAPTION_AD_TAG=1 in .env)
+         <blank line>
+         search phrases, separated by commas
+       Returns None if the caption is not usable."""
     cap = (LAST_POST["caption"] or "").strip()
-    tags = (LAST_POST["tags"] or "").strip()
     if not cap or cap.startswith("(Caption nahi bana"):
         return None
-    if DISCLOSURE.lower() not in cap.lower():
-        cap = cap + "\n" + DISCLOSURE
-    if "comment link" not in cap.lower():               # any rotated wording is fine as long as it says "Comment LINK"
-        cap = cap + "\n" + (LAST_POST.get("cta") or CTA_LINE)
-    if "#ad" not in (" " + tags.lower() + " "):
-        tags = (tags + " #ad").strip()
-    return (cap + "\n\n" + tags).strip()[:2200]
+    lines = [l.strip() for l in cap.splitlines() if l.strip()]
+    body = [l for l in lines if DISCLOSURE.lower() not in l.lower()
+            and not (re.search(r"comment\s+link", l, re.I) and len(l) <= 90)]       # the program adds these two lines itself
+    body = body or [l for l in lines if DISCLOSURE.lower() not in l.lower()] or lines
+    cta = LAST_POST.get("cta") or CTA_LINE
+    out = "\n".join(body + ([DISCLOSURE] if SHOW_DISCLOSURE else []) + [cta]) + "\n\n" + " ".join(_hashtags(LAST_POST["tags"]))
+    search = LAST_POST.get("search") or _search_phrases([], {})
+    if search:
+        out += "\n\n" + ", ".join(search)
+    return out.strip()[:2200]
 
 
 def publish_caption(out_dir):
@@ -631,7 +694,52 @@ def publish_caption(out_dir):
     return cap
 
 
-def post_to_instagram(d, out_dir, p, report, script=None):
+SCAN_ACTION = "android.intent.action.MEDIA_SCANNER_SCAN_FILE"
+
+
+def scan_file(path):
+    """Tell Android's gallery database about a new / changed / deleted file, so the picker shows the right order."""
+    try:
+        phone.adb("shell", "am", "broadcast", "-a", SCAN_ACTION, "-d", "file://" + path)
+    except Exception as e:
+        print("  (media scan skipped:", str(e)[:80], ")")
+
+
+def clean_reference_shots():
+    """Delete the temporary product pictures (product_shot_*) that this program pushed for YouTube Create.
+    They were touched to be the NEWEST item in the picker, so left on the phone they come BEFORE the Reel video in the
+    Instagram gallery and the bot picked the picture instead of the video."""
+    try:
+        names = (phone.adb("shell", "ls /sdcard/Pictures 2>/dev/null") or "").split()
+    except Exception as e:
+        print("  (could not list the phone pictures:", str(e)[:80], ")")
+        return
+    n = 0
+    for name in names:
+        if name.startswith("product_shot_"):
+            path = "/sdcard/Pictures/" + name
+            try:
+                phone.adb("shell", "rm", "-f", path)
+                scan_file(path)             # a scan of a deleted path removes it from the gallery database
+                n += 1
+            except Exception as e:
+                print("  (could not delete %s: %s)" % (name, str(e)[:60]))
+    if n:
+        print("  %d temporary product picture(s) removed from the phone gallery (so the video is the newest item)" % n)
+
+
+def make_video_newest(remote_video):
+    """The Reel video must be the very first item of the Instagram gallery: new date + gallery scan + no newer pictures."""
+    try:
+        phone.adb("shell", "touch", remote_video)
+    except Exception as e:
+        print("  (touch failed:", str(e)[:80], ")")
+    scan_file(remote_video)
+    clean_reference_shots()
+    time.sleep(3)
+
+
+def post_to_instagram(d, out_dir, p, report, script=None, with_dm=True):
     """Post video.mp4 as a Reel, then link the Meesho Creator Club auto-DM (keyword: Link).
     Refuses to post when the checks did not pass or the voice could not be checked."""
     checks = (report or {}).get("checks", {})
@@ -657,70 +765,169 @@ def post_to_instagram(d, out_dir, p, report, script=None):
     remote_video = "/sdcard/Movies/reel_%s.mp4" % os.path.basename(out_dir)
     print("\n6/7 Instagram Reel post ho raha hai...")
     print("  caption:\n" + cap)
+    odd = sorted(set(c for c in cap if ord(c) > 127))
+    if odd:
+        print("  NOTE: the typer can only enter plain keyboard characters, these will be left out of the caption:", " ".join(odd[:14]))
+    phone.adb("shell", "rm", "-f", remote_video)
     phone.push_media(video, remote_video)
-    phone.adb("shell", "touch", remote_video)
-    time.sleep(2)
+    make_video_newest(remote_video)         # newest date + gallery scan + product pictures deleted: the video is the FIRST item
     phone.open_app(d, PKG["instagram"])
-    ok, why = agent.run_task(d,
-        "In Instagram, create a new Reel using the video '" + os.path.basename(remote_video) + "' (the most recent video in the gallery). "
-        "Proceed through the next screens without adding music, effects or stickers, and when asked for the caption type exactly the text provided. "
-        "Then tap Share. Done when the Reel is shared / uploading confirmation appears.",
-        max_steps=45, key="instagram_post", texts=[cap])
+    ok, why = post_guard.post_reel(d, cap, os.path.basename(remote_video))     # checks every stage, never shares unless all is right
     print("  instagram:", "OK" if ok else "FAIL", "-", why)
     if not ok:
         print("POST SHAYAD NAHI HUA. Instagram khol ke check karo, phir manually post karo. Caption post.txt me hai.")
         return False
     with open(marker, "w", encoding="utf-8") as f:
         f.write(time.strftime("%Y-%m-%d %H:%M:%S") + "\n")
+    if not with_dm:
+        print("7/7 Auto-DM: is run me nahi manga gaya, skip.")
+        return ok
     time.sleep(30)
     print("7/7 Meesho Creator Club auto-DM link ho raha hai...")
-    phone.open_app(d, PKG["meesho"])
-    ok2, why2 = agent.run_task(d,
-        "In the Meesho app open Creator Club and find the auto DM option. Select the Instagram post/reel I just posted "
-        "(the newest one) for the product '" + p["name"] + "' and confirm so the auto DM is linked to that post. "
-        "If it asks for a comment keyword / trigger word, use exactly: Link. "
-        "Done when it shows the auto DM is active/linked to the post.",
-        max_steps=50, key="creator_club")
+    ok2, why2 = auto_dm.link_auto_dm(d, p.get("url") or "", p.get("name") or "")      # kills Meesho, wishlists fresh, links the auto-DM
     print("  creator club:", "OK" if ok2 else "FAIL", "-", why2)
     if not ok2:
         print("Reel post ho gaya, par Creator Club auto-DM link NAHI hua. Meesho me manually link karo.")
+    else:
+        with open(os.path.join(out_dir, "autodm.txt"), "w", encoding="utf-8") as f:
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S") + "\n" + str(why2) + "\n")
     return ok and ok2
+
+
+def post_gallery_reel(d, out_dir):
+    """Only post: the NEWEST video in the phone's gallery becomes a Reel, with the caption typed on the control page
+    (the page saves it to the file named in CAPTION_FILE). Nothing is made, checked or auto-DM'd."""
+    path = os.getenv("CAPTION_FILE", "").strip()
+    cap = ""
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            cap = f.read().replace("\r\n", "\n").strip()[:2200]
+    except Exception as e:
+        print("  (caption file could not be read:", str(e)[:100], ")")
+    if not cap:
+        print("\nPOST NAHI KIYA: caption khali hai. Page par caption likho aur dobara Start karo.")
+        return False
+    print("2/3 Phone ki gallery me sabse naya video dhoondh raha hoon...")
+    files = list_mp4()
+    if not files:
+        print("\nPOST NAHI KIYA: phone me koi .mp4 video nahi mila (folders: %s)." % ", ".join(VID_FOLDERS))
+        return False
+    newest = files[0]
+    when = ""
+    try:
+        when = (phone.adb("shell", "stat -c '%y' '" + newest + "'") or "").strip()[:19]
+    except Exception:
+        pass
+    print("  sabse naya video:", newest, ("(" + when + ")") if when else "")
+    odd = sorted(set(c for c in cap if ord(c) > 127))
+    if odd:
+        print("  WARNING: ye characters phone par shayad type nahi honge ya galat honge:", " ".join(odd[:14]))
+    with open(os.path.join(out_dir, "caption.txt"), "w", encoding="utf-8-sig") as f:
+        f.write(cap)
+    print("  caption (%d characters):\n%s" % (len(cap), cap))
+    print("3/3 Instagram Reel post ho raha hai...")
+    print("PHONE>> busy|The bot is posting the Reel on Instagram.")
+    try:
+        # make a fresh copy of the video so it is the NEWEST file in the gallery (a newer screenshot or picture must not come first)
+        fresh = "/sdcard/Movies/reel_%s.mp4" % time.strftime("%Y%m%d_%H%M%S")
+        try:
+            phone.adb("shell", "cp", newest, fresh)
+            phone.adb("shell", "touch", fresh)
+            scan_file(fresh)
+            clean_reference_shots()         # old product_shot_* pictures must not come before the video
+            time.sleep(3)
+        except Exception as e:
+            print("  (could not make the video the newest file:", str(e)[:80], ")")
+        phone.open_app(d, PKG["instagram"])
+        ok, why = post_guard.post_reel(d, cap, os.path.basename(newest))       # checks every stage, never shares unless all is right
+    finally:
+        print("PHONE>> free|Finished. The phone is yours.")
+    print("  instagram:", "OK" if ok else "FAIL", "-", why)
+    if not ok:
+        print("POST SHAYAD NAHI HUA. Instagram khol ke check karo. Caption caption.txt me hai:", out_dir)
+        return False
+    with open(os.path.join(out_dir, "posted.txt"), "w", encoding="utf-8") as f:
+        f.write(time.strftime("%Y-%m-%d %H:%M:%S") + "\n" + newest + "\n")
+    print("\nTAIYAAR! Reel post ho gayi. Folder:", out_dir)
+    return True
 
 
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     # MODE from the control page. Every level includes the ones before it:
     #   prompt = YT Create prompt + Instagram caption | video = + the video | post = + the Instagram Reel post and auto-DM
-    mode_env = {"prompt_only": "prompt", "yt_only": "video", "yt_instagram": "post"}.get(
+    mode_env = {"prompt_only": "prompt", "yt_only": "video", "yt_instagram": "autodm"}.get(
         os.getenv("MODE", "").strip().lower(), os.getenv("MODE", "").strip().lower())
-    do_post = "--post" in sys.argv[1:] or mode_env == "post"
+    # post = Instagram Reel only | autodm = Reel + Meesho Creator Club auto-DM | reelpost = ONLY post the newest gallery video
+    do_post = "--post" in sys.argv[1:] or mode_env in ("post", "autodm")
+    with_dm = "--post" in sys.argv[1:] or mode_env == "autodm"
+    reel_only = mode_env == "reelpost"
+    dm_only = mode_env == "autodmonly"       # TEST: no video, no post. Only wishlist the product + link the Meesho auto-DM
     prompt_only = "--prompt-only" in sys.argv[1:] or mode_env == "prompt"           # prompt + caption only, no video
-    if len(args) < 1:
+    if len(args) < 1 and not reel_only:
         print('Use: python main_link.py "PRODUCT_LINK" [--post]')
         return
-    url = args[0].strip()
+    url = args[0].strip() if args else ""
     os.makedirs(LOGS, exist_ok=True)
     stamp = time.strftime("%Y%m%d_%H%M%S")
     out_dir = os.path.join(OUT_ROOT, stamp)
     os.makedirs(out_dir, exist_ok=True)
     d = None
     try:
+        if reel_only:
+            print("Settings: mode=only post the newest gallery video as a Reel")
+            print("1/3 Phone connect ho raha hai...")
+            d = phone.connect()
+            if not post_gallery_reel(d, out_dir):
+                sys.exit(1)
+            return
+        if dm_only:
+            print("Settings: mode=only the Meesho auto-DM (test): no video is made, nothing is posted")
+            print("1/3 Phone connect ho raha hai...")
+            d = phone.connect()
+            print("2/3 Meesho Creator Club auto-DM link ho raha hai...")
+            print("PHONE>> busy|The bot is linking the Meesho auto-DM.")
+            try:
+                ok_dm, why_dm = auto_dm.link_auto_dm(d, url, "")
+            finally:
+                print("PHONE>> free|Finished. The phone is yours.")
+            print("  creator club:", "OK" if ok_dm else "FAIL", "-", why_dm)
+            if not ok_dm:
+                print("Auto-DM link NAHI hua. Logs / logs/autodm_*.png dekho.")
+                sys.exit(1)
+            print("3/3 Auto-DM test khatam.")
+            return
         print("Settings: mode=%s | video type=%s | spoken CTA=%s | text on video=%s"
               % ("prompt + caption only" if prompt_only else ("prompt + caption + video + Instagram post" if do_post else "prompt + caption + video"),
                  os.getenv("VIDEO_TYPE", "auto"), os.getenv("CTA", "random"), os.getenv("TEXT_OVERLAY", "false")))
-        print("1/5 Phone connect ho raha hai...")
-        d = phone.connect()
-        print("2/5 Link phone pe khol raha hoon...")
-        if not open_link(d, url):
-            raise RuntimeError("Link phone pe nahi khula. Link sahi hai? Meesho app installed hai?")
-        time.sleep(10)
-        print("3/5 Product ki photos (carousel) aur info ke screenshots le raha hoon...")
-        carousel, info, texts = capture_pages(d, out_dir)
+        web = None
+        if SCRAPE in ("web", "auto"):
+            print("1/5 Product page PC ke browser me khul raha hai (phone use nahi hoga)...")
+            try:
+                import meesho_web
+                web = meesho_web.fetch(url, out_dir)
+            except Exception as e:
+                print("  PC browser se product page nahi padh paya:", str(e)[:300])
+                if SCRAPE == "web":
+                    raise RuntimeError("Web se product nahi mila (SCRAPE=web, phone wala tareeka band hai): " + str(e)[:200])
+                print("  -> phone wala tareeka try kar raha hoon")
+        if web:
+            carousel, info, texts = web
+            GALLERY_BOX["full"] = True
+        else:
+            print("1/5 Phone connect ho raha hai...")
+            d = phone.connect()
+            print("2/5 Link phone pe khol raha hoon...")
+            if not open_link(d, url):
+                raise RuntimeError("Link phone pe nahi khula. Link sahi hai? Meesho app installed hai?")
+            time.sleep(10)
+            print("3/5 Product ki photos (carousel) aur info ke screenshots le raha hoon...")
+            carousel, info, texts = capture_pages(d, out_dir)
         if not carousel:
             raise RuntimeError("Product page ka screenshot nahi mila.")
         print("   Gallery ki photos pehchan raha hoon (product / model / size chart)...")
         cls = classify_images(carousel)
-        if cls and not any(c["type"] in ("product", "model") for c in cls.values()):
+        if cls and not GALLERY_BOX.get("full") and not any(c["type"] in ("product", "model") for c in cls.values()):
             print("  (no product picture in the crops -> asking the AI where the picture is on the screen)")
             _b = ai_gallery_box(carousel[0][1])
             if _b:
@@ -774,6 +981,9 @@ def main():
             except Exception:
                 pass
             return
+        if d is None:       # the product page was read on the PC: the phone is needed only from here (video + posting)
+            print("   Ab video ke liye phone connect ho raha hai...")
+            d = phone.connect()
         best, report = None, None
         MAX_TRIES = int(os.getenv("MAX_VIDEO_TRIES", "5"))
         for attempt in range(1, MAX_TRIES + 1):
@@ -867,7 +1077,7 @@ def main():
             pass
         if do_post:
             try:
-                post_to_instagram(d, out_dir, p, report, script)
+                post_to_instagram(d, out_dir, p, report, script, with_dm=with_dm)
             except Exception as e:      # the video + caption are already saved, so this is not a total failure
                 print("\nPOSTING FAIL:", str(e)[:200], "- video aur caption folder me safe hain, manually post karo.")
     except Exception as e:
@@ -884,6 +1094,11 @@ def main():
                 d.quit()
         except Exception:
             pass
+
+
+import user_feedback, phone_focus
+user_feedback.install(globals())     # FIRST: your notes from the page (change the video / help on the phone) + "Make again with this change"
+phone_focus.install(globals())       # then: gives the phone back to you while the bot does not need it
 
 
 main()

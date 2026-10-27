@@ -47,21 +47,188 @@ let lastParams = null;   // the form values of the last run (shown on every devi
 let appiumLogs = [];   // Appium has its own log box (it keeps running between jobs, so it is not cleared per job)
 let promptText = '';   // the YouTube Create prompt printed by main_link.py
 let captionText = '';  // the Instagram caption printed by main_link.py (also before the video is made)
+let phoneState = null; // what the bot does with the phone right now: {state: 'free'|'soon'|'busy', msg, seconds, at} (lines "PHONE>> ..." from phone_focus.py)
+
+const CAPTION_FILE = path.join(WORKDIR, 'manual_caption.txt');   // the caption typed on the page for "Only post a Reel" (main_link.py reads it)
+const FEEDBACK_FILE = path.join(WORKDIR, 'live_feedback.json');   // notes typed on the page; user_feedback.py (in main_link.py) reads them
+let feedbackItems = [];   // [{id, kind: 'video' | 'phone', text}] of the current run
+let lastRunDir = '';      // output folder of the latest run (printed by user_feedback.py as "RUNDIR>> ...")
+function writeFeedback() { try { fs.writeFileSync(FEEDBACK_FILE, JSON.stringify({ items: feedbackItems })); } catch (e) { console.log('could not write ' + FEEDBACK_FILE + ': ' + e.message); } }
+
+// ============================== HISTORY ==============================
+// Every run is saved in history.json (next to server.js), so the list survives restarts and is the same on every device.
+// The pair PIN is never saved. Deleting an entry removes only the entry, never the video files.
+const HISTORY_FILE = path.join(WORKDIR, 'history.json');
+const HISTORY_MAX = 300;       // the oldest runs are dropped after this many
+let history = [];              // newest first
+let curHist = null;            // the entry of the run that is going on now
+let histTail = [];             // the last lines of that run's log
+let histTimer = null;
+
+function saveHistoryNow() {
+  clearTimeout(histTimer);
+  const data = JSON.stringify({ version: 1, items: history });
+  try { fs.writeFileSync(HISTORY_FILE + '.tmp', data); fs.renameSync(HISTORY_FILE + '.tmp', HISTORY_FILE); }
+  catch (e) { try { fs.writeFileSync(HISTORY_FILE, data); } catch (e2) { console.log('could not save history: ' + e2.message); } }
+}
+function saveHistory() { clearTimeout(histTimer); histTimer = setTimeout(saveHistoryNow, 800); }
+function loadHistory() {
+  try { const j = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8')); history = Array.isArray(j.items) ? j.items : []; } catch { history = []; }
+  let changed = false;
+  history.forEach(h => { if (h.status === 'running') { h.status = 'stopped'; h.endedAt = h.endedAt || Date.now(); h.error = h.error || 'Interrupted: the server was restarted.'; changed = true; } });
+  if (changed) saveHistoryNow();
+}
+// "interactive-colorful-pom-pom-cat-toy/p/gqxtv5" -> "interactive colorful pom pom cat toy" (used until the real product name is printed)
+function nameFromLink(link) {
+  try {
+    const u = new URL(link);
+    const slug = u.pathname.split('/').filter(Boolean).find(s => s.length > 12 && s.includes('-')) || '';
+    return slug ? decodeURIComponent(slug).replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120) : u.hostname;
+  } catch { return ''; }
+}
+function startHistory(p, extra) {
+  const reel = p.mode === 'reelpost';
+  const link = reel ? '' : String(p.productLink || '');
+  const e = {
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+    startedAt: Date.now(), endedAt: null, status: 'running', mode: p.mode,
+    productLink: link, name: reel ? '' : nameFromLink(link),
+    params: { productLink: link, mode: p.mode, videoType: p.videoType, reelFormat: p.reelFormat || 'auto', customStyle: p.customStyle || '', audio: p.audio || 'auto',
+              cta: !!p.cta, textOverlay: !!p.textOverlay, overlayOpts: p.overlayOpts || [], overlayCustom: p.overlayCustom || '', caption: reel ? String(p.caption || '') : '' },
+    redo: !!(extra && extra.redo), feedback: (extra && extra.feedback) || '',
+    prompt: '', caption: reel ? String(p.caption || '') : '', folder: '', error: '', logTail: [],
+  };
+  history.unshift(e);
+  if (history.length > HISTORY_MAX) history = history.slice(0, HISTORY_MAX);
+  curHist = e; histTail = [];
+  saveHistoryNow();
+}
+// called for every log line of the running job
+function histCapture(l) {
+  const h = curHist; if (!h) return;
+  histTail.push(l); if (histTail.length > 300) histTail.shift();
+  let m;
+  if (l.startsWith('RUNDIR>> ')) h.folder = l.slice(9).trim();
+  else if (l.startsWith('YTPROMPT>> ')) h.prompt = l.slice(11);
+  else if (l.startsWith('CAPTION>> ')) { try { h.caption = String(JSON.parse(l.slice(10))); } catch (e) {} }
+  else if ((m = /^\s*Naam\s*:\s*(.+?)\s*$/.exec(l)) && !/^\(nahi mila\)$/.test(m[1])) h.name = m[1].slice(0, 200);
+  else if (!h.folder && (m = /Folder:\s*(.+?)\s*$/.exec(l))) h.folder = m[1];
+  if (/^❌ /.test(l.trim())) h.error = l.trim().slice(2).trim().slice(0, 300);
+}
+function finishHistory(s) {
+  const h = curHist; if (!h) return;
+  h.status = s; h.endedAt = Date.now(); h.logTail = histTail.slice(-200);
+  if (s === 'error' && !h.error) h.error = (histTail.filter(x => x.trim()).pop() || 'Failed').slice(0, 300);
+  if (s === 'stopped' && !h.error) h.error = 'Stopped by the user.';
+  curHist = null; histTail = [];
+  saveHistoryNow();
+}
+function folderPath(h) { return h.folder ? path.resolve(WORKDIR, h.folder) : ''; }
+function histView(h) {      // what the page gets: the entry plus facts about the files, without the long log
+  const dir = folderPath(h);
+  const has = f => { try { return fs.statSync(path.join(dir, f)).isFile(); } catch { return false; } };
+  let folderExists = false; try { folderExists = !!dir && fs.statSync(dir).isDirectory(); } catch {}
+  const { logTail, ...rest } = h;
+  return { ...rest, folderExists, hasVideo: folderExists && has('video.mp4'), posted: folderExists && has('posted.txt') };
+}
+function streamVideo(req, res, h, download) {
+  const dir = folderPath(h);
+  const file = dir ? path.join(dir, 'video.mp4') : '';
+  let st; try { st = fs.statSync(file); } catch { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); return res.end('The video file is not there (any more).'); }
+  const size = st.size;
+  const headers = { 'Content-Type': 'video/mp4', 'Accept-Ranges': 'bytes' };
+  if (download) headers['Content-Disposition'] = `attachment; filename="reel_${h.id}.mp4"`;
+  const m = /bytes=(\d*)-(\d*)/.exec(req.headers.range || '');
+  if (m && (m[1] || m[2])) {      // phones play video in pieces, so the Range header must work
+    let start = m[1] ? parseInt(m[1], 10) : size - parseInt(m[2], 10);
+    let end = m[1] && m[2] ? parseInt(m[2], 10) : size - 1;
+    start = Math.max(0, start); end = Math.min(size - 1, end);
+    if (start > end || start >= size) { res.writeHead(416, { 'Content-Range': `bytes */${size}` }); return res.end(); }
+    res.writeHead(206, { ...headers, 'Content-Range': `bytes ${start}-${end}/${size}`, 'Content-Length': end - start + 1 });
+    return fs.createReadStream(file, { start, end }).on('error', () => res.destroy()).pipe(res);
+  }
+  res.writeHead(200, { ...headers, 'Content-Length': size });
+  fs.createReadStream(file).on('error', () => res.destroy()).pipe(res);
+}
+// GET /history | DELETE /history | GET /history/export | GET /history/<id> | DELETE /history/<id> | GET /history/<id>/video | POST /history/<id>/open-folder
+function handleHistory(req, res) {
+  const u = new URL(req.url, 'http://x');
+  const parts = u.pathname.split('/').filter(Boolean);
+  if (parts[0] !== 'history') return false;
+  const json = (code, obj, extra) => { res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...(extra || {}) }); res.end(JSON.stringify(obj)); };
+  const text = (code, t) => { res.writeHead(code, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end(t); };
+  const id = parts[1], action = parts[2];
+  if (!id) {
+    if (req.method === 'GET') { json(200, history.map(histView)); return true; }
+    if (req.method === 'DELETE') {      // clear all, but never the run that is going on right now
+      const keep = history.filter(h => h.status === 'running');
+      const removed = history.length - keep.length;
+      history = keep; saveHistoryNow();
+      json(200, { removed }); return true;
+    }
+    text(405, 'Method not allowed'); return true;
+  }
+  if (id === 'export' && req.method === 'GET') {
+    json(200, { exportedAt: new Date().toISOString(), items: history }, { 'Content-Disposition': 'attachment; filename="affiliate-history.json"' });
+    return true;
+  }
+  if (!/^[a-z0-9]{4,20}$/.test(id)) { text(400, 'Bad id'); return true; }
+  const h = history.find(x => x.id === id);
+  if (!h) { text(404, 'That entry does not exist (any more).'); return true; }
+  if (!action && req.method === 'GET') { json(200, { ...histView(h), logTail: h.logTail || [] }); return true; }
+  if (!action && req.method === 'DELETE') {
+    if (h.status === 'running') { text(409, 'This run is still in progress. Stop it first.'); return true; }
+    history = history.filter(x => x !== h); saveHistoryNow();
+    text(200, 'deleted'); return true;
+  }
+  if (action === 'video' && req.method === 'GET') { streamVideo(req, res, h, u.searchParams.has('download')); return true; }
+  if (action === 'open-folder' && req.method === 'POST') {
+    const mine = new Set(['127.0.0.1', '::1']);
+    Object.values(os.networkInterfaces()).flat().forEach(i => mine.add(i.address));
+    const ip = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+    if (!mine.has(ip)) { text(403, 'Open this page on the PC itself to open the folder there.'); return true; }
+    const dir = folderPath(h);
+    try { if (!dir || !fs.statSync(dir).isDirectory()) throw 0; } catch { text(404, 'The folder is not there (any more).'); return true; }
+    const opener = process.platform === 'win32' ? 'explorer' : process.platform === 'darwin' ? 'open' : 'xdg-open';
+    try { spawn(opener, [dir], { detached: true, stdio: 'ignore' }).on('error', () => {}).unref(); } catch (e) {}
+    text(200, 'opened'); return true;
+  }
+  text(404, 'Not found'); return true;
+}
+loadHistory();
+
+function phonePayload() {   // 'soon' carries the seconds that are left, so every device can run its own countdown
+  if (!phoneState) return null;
+  const left = phoneState.state === 'soon' ? Math.max(0, Math.round(phoneState.seconds - (Date.now() - phoneState.at) / 1000)) : 0;
+  return { state: phoneState.state, msg: phoneState.msg, left };
+}
+function sendPhone() { clients.forEach(c => c.write(`data: ${JSON.stringify({ phone: phonePayload() })}\n\n`)); }
 
 function log(line) {
   const text = String(line).replace(/\r/g, '');
   text.split('\n').forEach(l => {
     if (!l.trim()) return;
+    if (l.startsWith('PHONE>> ')) {      // "PHONE>> free|message", "PHONE>> soon|20|message", "PHONE>> busy|message"
+      const parts = l.slice(8).split('|');
+      phoneState = parts[0] === 'soon' ? { state: 'soon', seconds: Number(parts[1]) || 20, msg: parts[2] || '', at: Date.now() }
+                                       : { state: parts[0], msg: parts[1] || '' };
+      sendPhone();
+      return;                            // this line is for the page banner only, not for the log
+    }
+    if (l.startsWith('RUNDIR>> ')) lastRunDir = l.slice(9).trim();
     if (l.startsWith('YTPROMPT>> ')) { promptText = l.slice(11); clients.forEach(c => c.write(`data: ${JSON.stringify({ prompt: promptText })}\n\n`)); }
     if (l.startsWith('CAPTION>> ')) {     // one JSON string (the caption has line breaks, a log line cannot)
       try { captionText = String(JSON.parse(l.slice(10))); clients.forEach(c => c.write(`data: ${JSON.stringify({ caption: captionText })}\n\n`)); } catch (e) {}
     }
+    if (curHist) histCapture(l);
     logs.push(l);
     clients.forEach(c => c.write(`data: ${JSON.stringify({ line: l })}\n\n`));
   });
 }
 function setStatus(s) {
   status = s;
+  if (s !== 'running') finishHistory(s);       // the run is over: save how it ended
+  if (s !== 'running' && phoneState) { phoneState = null; sendPhone(); }    // the job is over: the phone is yours
   clients.forEach(c => c.write(`data: ${JSON.stringify({ status: s })}\n\n`));
 }
 
@@ -184,13 +351,19 @@ async function pipeline(p) {
   logs = [];
   promptText = '';
   captionText = '';
+  phoneState = null;
+  feedbackItems = [];
+  writeFeedback();
   stopRequested = false;
   setStatus('running');
   clients.forEach(c => c.write(`data: ${JSON.stringify({ reset: true })}\n\n`));
   try {
+    let r;
+    const needPhone = true;     // prompt + caption mode reads the product page in a PC browser: no phone, no adb, no Appium
+    if (!needPhone) log('Prompt + caption mode: the phone is not needed, the product page is read in a browser on this PC.');
+    if (needPhone) {
     // The code is given as an argument (more reliable on Windows than typing it into adb's prompt)
     const auto = p.connectMode === 'auto';
-    let r;
     let connect = null;
     let connected = false;
 
@@ -275,10 +448,19 @@ async function pipeline(p) {
     await startAppium();
 
     updateEnv(ENV_USE_PORT ? connect : connect.split(':')[0]);
+    }   // end of needPhone
 
     const noVoice = p.audio === 'none';
+    const reelOnly = p.mode === 'reelpost';
+    if (reelOnly) {
+      try { fs.writeFileSync(CAPTION_FILE, String(p.caption || ''), 'utf8'); }
+      catch (e) { throw new Error('Could not save the caption: ' + e.message); }
+      log(`\nOnly post a Reel: the newest video in the phone's gallery will be posted with your caption (${String(p.caption || '').length} characters).`);
+    } else {
+      try { fs.unlinkSync(CAPTION_FILE); } catch {}   // an old caption must never be used by another run
+    }
     log(`\nVideo type: ${p.videoType} | Style: ${p.reelFormat || 'auto'} | Audio: ${p.audio} | CTA: ${p.cta && !noVoice} | Text overlay: ${p.textOverlay ? (p.overlayOpts || []).join('+') : 'off'} | Mode: ${p.mode}`);
-    r = await run('python', ['-u', 'main_link.py', p.productLink], {
+    r = await run('python', ['-u', 'main_link.py', ...(reelOnly ? [] : [p.productLink])], {
       cwd: WORKDIR,
       env: {
         PYTHONUNBUFFERED: '1',
@@ -291,6 +473,12 @@ async function pipeline(p) {
         TEXT_OVERLAY_OPTS: p.textOverlay ? (p.overlayOpts || []).join(',') : '',
         TEXT_OVERLAY_CUSTOM: p.textOverlay && (p.overlayOpts || []).includes('custom') ? String(p.overlayCustom || '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, 40) : '',
         MODE: p.mode,
+        CAPTION_FILE: reelOnly ? CAPTION_FILE : '',      // "Only post a Reel": the caption typed on the page
+        FEEDBACK_FILE,                                  // live notes from the page
+        REUSE_RUN: p.redoDir || '',                     // "Make again": re-use the screenshots + script of that folder
+        USER_FEEDBACK: p.feedback || '',                // "Make again": the change you asked for
+        RETURN_TO_BROWSER: p.connectMode === 'auto' ? '1' : '0',   // started from the phone: bring its browser back whenever the phone is not needed
+        SCRAPE: 'phone',   // no phone in this mode: the page must be read on the PC
       },
     });
     if (r.code !== 0) throw new Error('main_link.py exited with code ' + r.code);
@@ -310,9 +498,11 @@ async function pipeline(p) {
 const ADDR = /^[\w.\-]+:\d{2,5}$/;
 const PIN = /^\d{4,8}$/;
 const VIDEO = ['hands', 'person', 'pet', 'animated'];
-// Every mode includes the ones before it: prompt = YT Create prompt + caption | video = + video | post = + Instagram post and auto-DM
-const MODES = ['prompt', 'video', 'post'];
-const LEGACY_MODES = { prompt_only: 'prompt', yt_only: 'video', yt_instagram: 'post' };   // old page versions
+// Every mode includes the ones before it: prompt = YT Create prompt + caption | video = + video | post = + Instagram post | autodm = + Meesho auto-DM
+// autodmonly stands alone: no video, no post; it only wishlists the product and links the Meesho auto-DM to the most recent Instagram post (for testing)
+// reelpost stands alone: it only posts the newest video of the phone's gallery as a Reel, with the caption typed on the page
+const MODES = ['prompt', 'video', 'post', 'autodm', 'autodmonly', 'reelpost'];
+const LEGACY_MODES = { prompt_only: 'prompt', yt_only: 'video', yt_instagram: 'autodm' };   // old page versions
 const CONNECT_MODES = ['auto', 'manual'];
 const AUDIO = ['auto', 'voice', 'none'];            // auto = random, voice = someone talks/narrates/sings, none = music or sounds only
 const OVERLAY_IDS = ['name', 'cute', 'hook', 'feature', 'custom', 'comment', 'dm', 'follow', 'bio'];   // texts that can be shown on the video
@@ -330,6 +520,13 @@ function getStyles(cb) {
 
 function validate(b) {
   if (LEGACY_MODES[b.mode]) b.mode = LEGACY_MODES[b.mode];
+  if (!MODES.includes(b.mode)) return 'Invalid mode';
+  if (b.mode === 'reelpost' || b.mode === 'autodmonly') {     // no video is made: ignore the video-only choices left over on the page
+    b.textOverlay = false;
+    if (b.reelFormat === 'custom') b.reelFormat = 'auto';
+    if (!VIDEO.includes(b.videoType)) b.videoType = 'hands';
+  }
+  if (b.mode !== 'prompt') {      // phone details are not needed for prompt + caption mode
   if (!CONNECT_MODES.includes(b.connectMode)) return 'Invalid connect mode';
   if (b.pairPin && !PIN.test(b.pairPin)) return 'Invalid pair PIN';
   if (b.connectMode === 'manual') {
@@ -337,8 +534,15 @@ function validate(b) {
     if (b.pairLink && !ADDR.test(b.pairLink)) return 'Invalid ADB pair link (expected ip:port)';
     if ((b.pairLink || b.pairPin) && !(b.pairLink && b.pairPin)) return 'For pairing, fill both the pair link and the pair PIN';
   }
-  try { const u = new URL(b.productLink); if (!/^https?:$/.test(u.protocol)) throw 0; } catch { return 'Invalid product link'; }
-  if (/["'`&|<>^\s]/.test(b.productLink)) return 'Product link has unsafe characters';
+  }
+  if (b.mode === 'reelpost') {
+    const cap = String(b.caption || '').replace(/\r\n?/g, '\n');
+    if (!cap.trim()) return 'Type the caption for the Reel.';
+    if (cap.length > 2200) return 'The caption is too long (Instagram allows 2,200 characters).';
+  } else {
+    try { const u = new URL(b.productLink); if (!/^https?:$/.test(u.protocol)) throw 0; } catch { return 'Invalid product link'; }
+    if (/["'`&|<>^\s]/.test(b.productLink)) return 'Product link has unsafe characters';
+  }
   if (!VIDEO.includes(b.videoType)) return 'Invalid video type';
   if (b.audio !== undefined && !AUDIO.includes(b.audio)) return 'Invalid audio choice';
   if (b.reelFormat !== undefined && !STYLE_ID.test(b.reelFormat)) return 'Invalid video style';
@@ -350,6 +554,7 @@ function validate(b) {
     if (o.length > 3) return 'Pick at most 3 texts for the video';
     if (!o.every(x => OVERLAY_IDS.includes(x)) || new Set(o).size !== o.length) return 'Invalid text option';
     if (o.includes('custom') && !String(b.overlayCustom || '').trim()) return 'Type your own text (or untick "My own text")';
+    if (o.includes('dm') && !o.includes('comment')) return '"Link in your DM" only works together with "Comment LINK". Tick both, or untick "Link in your DM"';
   }
   if (b.overlayCustom !== undefined && String(b.overlayCustom).length > 40) return 'Your own text is too long (max 40 characters)';
   if (!MODES.includes(b.mode)) return 'Invalid mode';
@@ -357,6 +562,7 @@ function validate(b) {
 }
 
 http.createServer((req, res) => {
+  if (req.url.startsWith('/history') && handleHistory(req, res)) return;
   if (req.method === 'GET' && (req.url === '/' || req.url === '/index.html')) {
     const file = path.join(__dirname, 'index.html');
     return fs.readFile(file, (err, data) => {
@@ -373,7 +579,7 @@ http.createServer((req, res) => {
   }
   if (req.method === 'GET' && req.url === '/events') {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
-    res.write(`data: ${JSON.stringify({ status, lines: logs, appiumLines: appiumLogs, prompt: promptText, caption: captionText, params: lastParams })}\n\n`);
+    res.write(`data: ${JSON.stringify({ status, lines: logs, appiumLines: appiumLogs, prompt: promptText, caption: captionText, phone: phonePayload(), params: lastParams })}\n\n`);
     clients.push(res);
     req.on('close', () => { clients = clients.filter(c => c !== res); });
     return;
@@ -385,9 +591,16 @@ http.createServer((req, res) => {
       let b; try { b = JSON.parse(body); } catch { res.writeHead(400); return res.end('Bad JSON'); }
       const err = validate(b);
       if (err) { res.writeHead(400); return res.end(err); }
+      // "Make again with this change": needs the saved screenshots + script of the last run
+      let redoDir = '';
+      if (b.redo) {
+        try { const st = JSON.parse(fs.readFileSync(path.join(lastRunDir, 'run_state.json'), 'utf8')); if (st.capture && st.script) redoDir = lastRunDir; } catch (e) {}
+        if (!redoDir) { res.writeHead(400); return res.end('There is no saved run to repeat yet. Run the bot once first (the script and screenshots are saved when a run gets that far).'); }
+      }
+      const feedback = String(b.feedback || '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, 500);
       // Auto mode connects to the device that opened this page, so we need to know its address
       const clientIp = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
-      if (b.connectMode === 'auto') {
+      if (b.connectMode === 'auto' && b.mode !== 'prompt') {
         const mine = new Set(['127.0.0.1', '::1']);
         Object.values(os.networkInterfaces()).flat().forEach(i => mine.add(i.address));
         if (mine.has(clientIp)) {
@@ -400,9 +613,27 @@ http.createServer((req, res) => {
         await stopJob();          // Start again while running = stop first, then start fresh
       }
       lastParams = { pairLink: b.pairLink, pairPin: b.pairPin, connectLink: b.connectLink, productLink: b.productLink,
-                     videoType: b.videoType, reelFormat: b.reelFormat || 'auto', customStyle: String(b.customStyle || ''), audio: b.audio || 'auto', cta: !!b.cta, textOverlay: !!b.textOverlay, overlayOpts: Array.isArray(b.overlayOpts) ? b.overlayOpts.filter(x => OVERLAY_IDS.includes(x)).slice(0, 3) : [], overlayCustom: String(b.overlayCustom || '').slice(0, 40), mode: b.mode, connectMode: b.connectMode };
+                     videoType: b.videoType, reelFormat: b.reelFormat || 'auto', customStyle: String(b.customStyle || ''), audio: b.audio || 'auto', cta: !!b.cta, textOverlay: !!b.textOverlay, overlayOpts: Array.isArray(b.overlayOpts) ? b.overlayOpts.filter(x => OVERLAY_IDS.includes(x)).slice(0, 3) : [], overlayCustom: String(b.overlayCustom || '').slice(0, 40), mode: b.mode, connectMode: b.connectMode,
+                     caption: String(b.caption || '').replace(/\r\n?/g, '\n').slice(0, 2200) };
       res.writeHead(200); res.end('started');
-      jobPromise = pipeline({ ...lastParams, clientIp });
+      startHistory(lastParams, { redo: !!b.redo, feedback });      // saved in the History tab
+      jobPromise = pipeline({ ...lastParams, clientIp, redoDir, feedback });
+    });
+    return;
+  }
+  if (req.method === 'POST' && req.url === '/feedback') {     // a note for the RUNNING bot
+    let body = '';
+    req.on('data', d => { body += d; if (body.length > 1e4) req.destroy(); });
+    req.on('end', () => {
+      let b; try { b = JSON.parse(body); } catch { res.writeHead(400); return res.end('Bad JSON'); }
+      const text = String(b.text || '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, 500);
+      if (text.length < 3) { res.writeHead(400); return res.end('Write a few words first.'); }
+      if (status !== 'running') { res.writeHead(409); return res.end('Nothing is running right now. Use "Make again with this change".'); }
+      const kind = b.kind === 'phone' ? 'phone' : 'video';
+      feedbackItems.push({ id: feedbackItems.length + 1, kind, text });
+      writeFeedback();
+      log(`\n\u270D Your note (${kind === 'phone' ? 'help on the phone' : 'change the video'}): ${text}`);
+      res.writeHead(200); res.end('sent');
     });
     return;
   }

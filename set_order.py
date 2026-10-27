@@ -1,5 +1,5 @@
 ﻿import re
-ORDER = "gemini,groq,nvidia,cloudflare,zai,openrouter,mistral"
+ORDER = "groq,nvidia,cloudflare,gemini,zai,openrouter,mistral"
 lines = open(".env", encoding="utf-8-sig").read().splitlines()
 found = False
 for i, l in enumerate(lines):

@@ -1,0 +1,19 @@
+[
+ {
+  "action": "tap",
+  "x": 63,
+  "y": 61,
+  "loc": {
+   "id": "com.instagram.android:id/action_bar_buttons_container_left"
+  }
+ },
+ {
+  "action": "tap",
+  "x": 500,
+  "y": 740,
+  "loc": {
+   "id": "com.instagram.android:id/auxiliary_button",
+   "text": "Start new video"
+  }
+ }
+]

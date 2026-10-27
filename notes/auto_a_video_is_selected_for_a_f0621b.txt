@@ -1,0 +1,8 @@
+Swipe up to unlock the phone from the lock screen
+Tap Next, OK, Continue, or Skip on every editing, music, effects, or sticker screen to bypass modifications
+Never go back, pick another file, or restart if the video duration is not visible
+Wait for UI transitions to complete after every tap before interacting with the next screen
+Stop once the caption box and Share button are visible
+Do not tap the Share button; the goal is to reach the caption screen, not publish
+Tap the caption box twice if typing does not start on the first tap
+Avoid adding stickers or effects manually; strictly follow the Next/Continue button flow

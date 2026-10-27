@@ -10,6 +10,8 @@ record(style) remembers the choice (style_history.json, last 10) so the next vid
 Try it without any AI:   python reel_styles.py 12        (prints 12 picks in a row)
 Force one format (test): REEL_FORMAT=claymation python main_link.py "LINK"     (ids: see FORMATS below)
 Optional .env: AD_MIX=40,40,20   (pure, light, direct)    STYLE_HISTORY=10
+               SHOW_PRICE=true|false   (the control page checkbox: may the video / caption mention the price? default false)
+               TEXT_LANG=english|hinglish|both   (language of the viral line ideas given to the AI, default both)
 trends.md (same folder, optional): one trend idea per line; 0-2 of them are offered to the AI as optional spice.
 """
 import json, os, random, re, sys, time
@@ -94,6 +96,181 @@ HOOK_DEFS = {
     "gift_moment": "someone gives or receives this as a gift, a tiny warm moment",
     "narrator_tease": "a calm storyteller line that sets a scene, then reveals the product",
     "product_speaks": "the PRODUCT itself talks in first person to its owner, cute and a little cheeky",
+}
+
+# ------------------------------------------------------- viral line ideas ----
+# (category id, title, [[english, hinglish], ...]).  The control page (index.html, TEXT_LIB) shows the same lines as tap-to-use
+# text for the video, so keep the two in sync.  Hinglish lines are written the way a person really talks (correct gender and
+# "aap" form), not translated word by word; every line is 40 characters or less (the text-on-video limit).
+# Here they are offered to the AI as optional inspiration for the spoken lines / caption.  The "price" lines are used only
+# when the price checkbox is on, the "pet" lines only for pet products, the "cta" lines never (the call to action has its own rule).
+TEXT_LIBRARY = [
+ ('gifting', 'Gifting', [
+  ["Your girlfriend deserves this!", "Aapki girlfriend ye deserve karti hai!"],
+  ["Your boyfriend needs this too", "Aapke boyfriend ko bhi ye chahiye"],
+  ["A gift he will actually use", "Aisa gift jo wo sach mein use karega"],
+  ["Mom deserves a better gift", "Mummy ko achha gift toh banta hai"],
+  ["Gift this to your sister", "Apni didi ko ye gift karo"],
+  ["Best friend's birthday, sorted", "Bestie ke birthday ka gift sorted"],
+  ["Stop gifting boring stuff", "Ab boring gift dena band karo"],
+  ["Send this to the one who needs it", "Ye usko bhejo jise ye chahiye"],
+  ["Surprise someone today", "Aaj kisi ko surprise de do"],
+  ["The gift she will not forget", "Ye gift wo kabhi nahi bhoolegi"],
+ ]),
+ ('couple', 'Couples and love', [
+  ["For the one you love", "Aapke special person ke liye"],
+  ["Anniversary gift idea", "Anniversary ke liye gift idea"],
+  ["Valentine's gift, sorted", "Valentine's ka gift sorted hai"],
+  ["Surprise your partner", "Apne partner ko surprise do"],
+  ["Tag your special person", "Apne special person ko tag karo"],
+  ["Make her smile today", "Aaj use khush kar do"],
+  ["He will love this", "Use ye bahut pasand aayega"],
+ ]),
+ ('pov', 'POV', [
+  ["POV: you found the cutest thing", "POV: aapko sabse cute cheez mil gayi"],
+  ["POV: your friend sees this on your desk", "POV: dost ne desk par ye dekh liya"],
+  ["POV: Mummy finds this in your cart", "POV: Mummy ne aapke cart mein ye dekha"],
+  ["POV: you nailed the gift this time", "POV: is baar gift ekdum perfect nikla"],
+  ["POV: you needed this all along", "POV: ye toh kab se chahiye tha"],
+  ["POV: she opens your gift", "POV: wo aapka gift khol rahi hai"],
+  ["POV: your room finally looks cute", "POV: aapka room ab cute lag raha hai"],
+ ]),
+ ('funny', 'Funny desi', [
+  ["Mummy: another purchase? Me: yes", "Mummy: phir shopping? Main: haan"],
+  ["Bro asked for it, now what", "Bhai ne maang liya, ab kya karun"],
+  ["My wallet vs this cute thing", "Mera wallet vs ye cute cheez"],
+  ["Adding to cart at 2 AM", "Raat ke 2 baje cart mein daal diya"],
+  ["Not me buying this again", "Phir se le aaya main, kya karun"],
+  ["Me: no more shopping. Also me:", "Main: ab shopping nahi. Phir main:"],
+  ["Salary came, cart is ready", "Salary aayi, cart pehle se ready hai"],
+  ["Do not tell Mummy about this", "Mummy ko mat batana"],
+ ]),
+ ('hook', 'Stop scrolling', [
+  ["Stop scrolling, you need this", "Ruko, scroll mat karo, ye dekho"],
+  ["Save this before you forget", "Save kar lo, warna bhool jaoge"],
+  ["Everyone is buying this", "Aajkal sab ye hi le rahe hain"],
+  ["Found it so you do not have to", "Maine dhundh liya, aap bas le lo"],
+  ["This did not go viral for nothing", "Ye yun hi viral nahi hua"],
+  ["Trending right now", "Abhi sabse zyada trending"],
+  ["Hidden gem alert", "Ek hidden gem mil gaya"],
+ ]),
+ ('curious', 'Curiosity and wait for it', [
+  ["Wait for it...", "Ruko zara, aage dekho..."],
+  ["Did you know this existed?", "Aapko pata tha ye bhi aata hai?"],
+  ["You won't believe what this does", "Yakeen nahi hoga ye kya karta hai"],
+  ["Watch till the end", "End tak zaroor dekhna"],
+  ["Wait, what is this?!", "Ruko, ye kya hai?!"],
+  ["Guess what this is", "Guess karo ye kya hai"],
+  ["Nobody told me about this", "Mujhe kisi ne bataya hi nahi"],
+ ]),
+ ('confess', 'Confession and proof', [
+  ["I did not expect this to be so good", "Sach bolun? Itna achha expect nahi tha"],
+  ["Everyone asks where I got this", "Sab pooch rahe hain kahan se liya"],
+  ["Bought for one reason, loved for more", "Ek wajah se liya, ab har wajah se pasand"],
+  ["Don't tell anyone, but...", "Kisi ko batana mat, lekin..."],
+  ["Small find, big smile", "Chhoti si find, badi si smile"],
+  ["Okay, I get the hype now", "Ab samajh aaya hype kyun hai"],
+ ]),
+ ('self', 'Treat yourself', [
+  ["You deserve this", "Aap ye deserve karte ho"],
+  ["Treat yourself today", "Aaj khud ko treat de do"],
+  ["Self-love, but make it cute", "Self-love, thoda cute wala"],
+  ["Add this to your wishlist", "Isse apni wishlist mein daal lo"],
+  ["Your sign to buy it", "Ye lo, lene ka sign mil gaya"],
+ ]),
+ ('desk', 'Desk, room and aesthetic', [
+  ["Desk setup, upgraded", "Desk setup ab upgrade ho gaya"],
+  ["Cute room corner", "Room ka cute corner"],
+  ["Aesthetic find of the day", "Aaj ki sabse aesthetic find"],
+  ["Your desk needed this", "Aapke desk ko ye chahiye tha"],
+  ["This makes any corner cute", "Isse har corner cute lagta hai"],
+  ["Instagram-worthy find", "Ekdum Instagram-worthy find"],
+ ]),
+ ('debate', 'Questions and comments', [
+  ["Keep it or return it?", "Aap rakhoge ya return karoge?"],
+  ["Rate this out of 10", "Isko 10 mein se kitne doge?"],
+  ["Tag someone who needs this", "Jisko ye chahiye use tag karo"],
+  ["Save this for your next shopping", "Agli shopping ke liye save kar lo"],
+  ["Comment if you want this", "Chahiye toh comment karo"],
+  ["Would you buy this?", "Aap ye kharidoge?"],
+  ["Yes or no?", "Haan ya na?"],
+ ]),
+ ('festive', 'Festive and seasonal', [
+  ["Diwali gift sorted", "Diwali ka gift sorted hai"],
+  ["Festive mood: on", "Festive mood on hai"],
+  ["Cute gift for Bhai Dooj", "Bhai Dooj ke liye cute gift"],
+  ["Karwa Chauth gift idea", "Karwa Chauth ke liye gift idea"],
+  ["Wedding season find", "Shaadi season ki best find"],
+  ["Rakhi gift idea", "Rakhi ke liye gift idea"],
+  ["Secret Santa idea", "Secret Santa ke liye perfect"],
+  ["Diwali gifting made easy", "Diwali ka gift ab easy hai"],
+ ]),
+ ('pet', 'Pet', [
+  ["Your pet deserves this", "Aapka pet ye deserve karta hai"],
+  ["My dog approved this", "Mere dog ne ye approve kar diya"],
+  ["Pet parents, you need this", "Pet parents, ye aapke liye hai"],
+  ["Cat approved. Finally.", "Cat ne approve kar diya, finally"],
+  ["Your furry baby will love it", "Aapke furry baby ko ye pasand aayega"],
+  ["A must-have for pet parents", "Har pet parent ke liye must-have"],
+ ]),
+ ('price', 'Price lines (only when price is ON)', [
+  ["Budget-friendly gift", "Budget mein perfect gift"],
+  ["Cheaper than your coffee", "Aapki coffee se bhi sasta"],
+  ["Pocket-friendly find", "Pocket ke liye ekdum sahi"],
+  ["Yes, it is this affordable", "Haan, sach mein itna sasta hai"],
+  ["Big joy, small price", "Kam price, zyada khushi"],
+ ]),
+ ('cta', 'Call to action (full lines)', [
+  ["Comment LINK, get it in your DM", "LINK comment karo, DM mein mil jayega"],
+  ["Comment LINK and check your DM", "LINK comment karo, phir DM check karo"],
+  ["Want it? Comment LINK", "Chahiye? Comment mein LINK likho"],
+  ["Comment LINK, link lands in your DM", "LINK comment karo, link DM mein aayega"],
+  ["Follow for more finds like this", "Aise aur finds ke liye follow karo"],
+  ["Shop link in bio", "Shop link bio mein hai"],
+ ]),
+]
+
+
+def _lang(lang=None):
+    v = (lang if lang is not None else os.getenv("TEXT_LANG", "both")).strip().lower()
+    return v if v in ("english", "hinglish", "both") else "both"
+
+
+def hook_ideas(lang=None, show_price=False, n=3, pet=False):
+    """n viral line ideas from n different categories, in English, Hinglish or a mix."""
+    lang = _lang(lang)
+    cats = [c for c in TEXT_LIBRARY if c[0] != "cta" and (show_price or c[0] != "price") and (pet or c[0] != "pet")]
+    out = []
+    for cid, title, lines in random.sample(cats, min(n, len(cats))):
+        en, hi = random.choice(lines)
+        out.append(en if lang == "english" else hi if lang == "hinglish" else random.choice([en, hi]))
+    return out
+
+
+PRICE_OFF = ("PRICE RULE: do NOT mention any price, cost, discount, offer, 'cheap', 'cheapest' or 'budget' anywhere "
+             "(no rupee amounts, no Rs, no numbers about money).")
+PRICE_ON = ("PRICE RULE: you MAY mention the price once (one spoken line or the caption), but ONLY if it is clearly visible on the "
+            "product page. Never invent, round or guess a price and never say 'cheapest'.")
+PRICE_CAPTION = {False: "Do not mention the price. ", True: "You may mention the verified price once, never a guessed one. "}
+
+# groups used by the control page to open the style list section by section
+GROUP_ORDER = ["Story & talk", "Funny & POV", "Gifting", "Festive", "Aesthetic & reveal", "ASMR & satisfying",
+               "Animated", "Pet", "How-to & facts"]
+GROUP_OF = {
+    "classic": "Story & talk", "voice_note": "Story & talk", "narrator_reveal": "Story & talk", "honest_review": "Story & talk",
+    "comedy_skit": "Funny & POV", "pov_skit": "Funny & POV", "mummy_vs_me": "Funny & POV", "rate_it": "Funny & POV",
+    "text_pov": "Funny & POV", "wallet_joke": "Funny & POV",
+    "gift_reveal": "Gifting", "unboxing_smile": "Gifting", "gift_hint": "Gifting", "gift_wrapup": "Gifting",
+    "festive_greeting": "Festive", "diwali_sparkle": "Festive",
+    "lofi_showoff": "Aesthetic & reveal", "quiet_closeup": "Aesthetic & reveal", "lifestyle_vibe": "Aesthetic & reveal",
+    "dramatic_reveal": "Aesthetic & reveal", "glow_up": "Aesthetic & reveal", "cosy_room": "Aesthetic & reveal",
+    "colour_flatlay": "Aesthetic & reveal",
+    "asmr_hands": "ASMR & satisfying", "satisfying_loop": "ASMR & satisfying", "unboxing_asmr": "ASMR & satisfying",
+    "product_speaks": "Animated", "jingle": "Animated", "claymation": "Animated", "cartoon_3d": "Animated",
+    "stopmotion_pack": "Animated",
+    "pet_play": "Pet", "pet_storyteller": "Pet", "pet_inner_voice": "Pet", "pet_owner_voice": "Pet", "pet_asmr": "Pet",
+    "pet_loop": "Pet", "pet_cosy": "Pet", "pet_reaction": "Pet",
+    "howto_steps": "How-to & facts", "did_you_know": "How-to & facts",
 }
 
 
@@ -236,6 +413,103 @@ FORMATS += [
        plan="a cosy home moment where a healthy adult pet relaxes with or uses the product exactly the way it is meant to be used; only real, possible actions.",
        shots="The pet settles down next to the {p}; a smooth close-up while it uses the {p}; end on a relaxed, happy full view."),
 ]
+
+# ---- NEW formats (viral-style: gifting, POV, reveal transitions, festive, rating, did-you-know) ----
+# with a voice (two spoken lines, about 13-16 words). They reuse the hook types above; the brief carries the specifics.
+FORMATS += [
+    _f("gift_hint", "gift hint (\"she deserves this\")", "talk", "gift_hint", 1.6, "product", dialogue=True, use_base_style=True,
+       hook_types=["gift_moment", "confession", "mini_story", "pov"], answer_rule=False,
+       brief="a warm, slightly teasing GIFT HINT. Line 1 speaks straight to the viewer about someone they love (girlfriend, boyfriend, "
+             "Mummy, Didi, Bhai or bestie), in the spirit of 'your girlfriend deserves this'. Line 2 shows the product as the thoughtful "
+             "gift and the one small reason it feels special. Sweet, never pushy."),
+    _f("pov_skit", "POV skit", "talk", "pov", 1.5, "product", dialogue=True, use_base_style=True,
+       hook_types=["pov", "mini_story", "funny_exaggeration", "relatable_pain"], answer_rule=False,
+       brief="a POV micro-skit. Line 1 starts with 'POV' (or 'Jab...') and puts the viewer inside a very relatable moment, line 2 is a "
+             "short twist where the product quietly appears. Feels like a friend's reel, not an ad."),
+    _f("mummy_vs_me", "Mummy vs me", "talk", "comedy", 1.4, "product", dialogue=True, use_base_style=True,
+       hook_types=["mummy_reaction", "funny_exaggeration", "mini_story"], answer_rule=False,
+       brief="a funny desi exchange. Line 1 = what Mummy (or Bhai, Didi) says about the buying habit, line 2 = the cheeky answer "
+             "in which the product is the reason. Light family humour, nobody is insulted."),
+    _f("honest_review", "honest first reaction", "talk", "review", 1.3, "product", dialogue=True, use_base_style=True,
+       hook_types=["confession", "surprise_detail", "curiosity_gap"], answer_rule=False,
+       brief="a casual 'I did not expect this' voice-note reaction. Line 1 = what you thought before, line 2 = the one real thing "
+             "that surprised you. Only say things the product page clearly supports."),
+    _f("rate_it", "rate it / keep or return", "talk", "engage", 1.3, "product", dialogue=True, use_base_style=True,
+       hook_types=["curiosity_gap", "funny_exaggeration", "confession"], answer_rule=False,
+       brief="an engagement video. Line 1 asks the viewer a fun question (rate it out of 10, keep it or return it), line 2 reveals "
+             "one honest detail of the product and invites them to answer in the comments."),
+    _f("festive_greeting", "festive gift line", "narrator", "festive", 1.2, "product", dialogue=True, use_base_style=True,
+       hook_types=["gift_moment", "mini_story", "narrator_tease"], answer_rule=False,
+       voice_line="Voice: warm, cheerful festive storyteller narrator, speaking everyday Hindi." + _PRON,
+       brief="a warm festive narrator (Diwali, Bhai Dooj, wedding season or any celebration). Line 1 sets a happy festive moment, "
+             "line 2 gives the product as the small gift that makes it special."),
+    _f("did_you_know", "did you know?", "narrator", "facts", 1.2, "product", dialogue=True, use_base_style=True, needs_facts=True,
+       hook_types=["surprise_detail", "curiosity_gap"], answer_rule=False,
+       voice_line="Voice: calm, friendly narrator, speaking everyday Hindi." + _PRON,
+       brief="a 'did you know?' fact reel. Line 1 teases a small surprise, line 2 reveals ONE real feature from the VERIFIED FACTS. "
+             "No claim that the facts do not support."),
+    _f("wallet_joke", "wallet vs product (cartoon)", "talk", "comedy", 1.2, "none", dialogue=True, loose=True, answer_rule=False,
+       hook_types=["funny_exaggeration", "confession"],
+       voice_line="Voice: playful, friendly shopper voice, speaking everyday Hindi." + _PRON,
+       scene_rule="the product from the reference image, SAME shape and colours, as the cute hero of a tiny colourful cartoon desk "
+                  "world, bouncing happily, no people, no text on screen.",
+       core="Vertical 10-second cute 3D cartoon: the product bounces happily in a tiny colourful desk world.",
+       brief="a funny 'my wallet vs this product' voice. Line 1 = the playful shopper guilt ('I was only browsing'), line 2 = the "
+             "cheeky excuse that the product is too cute to skip. Light humour, no selling."),
+]
+# without a voice (music or sounds only)
+FORMATS += [
+    _f("dramatic_reveal", "dramatic reveal transition", "music", "reveal", 1.5, "product",
+       audio="Voice: NO voice, no talking. Music: a build-up that drops with a short whoosh at the reveal.",
+       core="Vertical 10-second dramatic reveal: a plain dull scene, then a snap-cut transition reveals the product in a bright, beautiful shot.",
+       plan="a dramatic reveal transition: a plain, slightly dull scene, then a quick snap-cut that reveals the product in a bright, beautiful hero shot.",
+       shots="A plain dull scene with the {p} barely visible; a snap cut with a whoosh; the {p} glows in a bright hero shot."),
+    _f("text_pov", "silent POV moment", "music", "pov", 1.2, "product",
+       audio="Voice: NO voice, no talking. Music: soft trendy lo-fi beat.",
+       core="Vertical 10-second silent relatable POV moment with the product, handheld feel. No words appear in the video itself.",
+       plan="a relatable POV moment acted out silently (the viewer's point of view) where the product is quietly the hero; the video itself shows NO text, any words are added later.",
+       shots="A handheld POV moment; the {p} comes into view; a small happy reaction; end on the {p}."),
+    _f("gift_wrapup", "gift wrap-up", "music", "gift_wrap", 1.2, "hands",
+       audio="Voice: NO voice, no talking. Music: warm happy instrumental with soft paper sounds.",
+       core="Vertical 10-second gift wrap-up: an adult's hands place the product in a small gift box, tie a ribbon and add a plain tag.",
+       plan="a satisfying gift wrap-up: adult hands place the product in a small plain gift box, tie a ribbon, add a blank tag card and slide it toward the camera.",
+       shots="Hands place the {p} in a small box; a ribbon is tied; the finished gift slides toward the camera."),
+    _f("glow_up", "before and after glow-up", "music", "beforeafter", 1.2, "hands",
+       audio="Voice: NO voice, no talking. Music: upbeat transformation beat.",
+       core="Vertical 10-second glow-up: a plain corner becomes nicer when adult hands place the product in it.",
+       plan="a before and after: a plain, slightly dull corner, then adult hands place the product and the same corner looks nicer; only things the product can really do.",
+       shots="A plain corner; hands place the {p}; the same corner now looks brighter and nicer."),
+    _f("cosy_room", "cosy room vibe", "music", "cosy", 1.2, "product",
+       audio="Voice: NO voice, no talking. Music: cosy warm lo-fi instrumental.",
+       core="Vertical 10-second cosy room vibe: warm fairy lights, soft shadows, the product in a calm corner, slow camera.",
+       plan="a cosy room vibe: warm fairy lights and soft shadows, the product sits (or is used the way it is meant to be) in a calm corner, slow camera.",
+       shots="Warm fairy lights glow; a slow move toward the {p}; end on a calm full view."),
+    _f("unboxing_asmr", "unboxing ASMR", "asmr", "satisfying", 1.2, "hands",
+       audio="Voice: NO voice, NO music. Sound: only close-up unboxing sounds (tape, paper, box, soft taps).",
+       core="Vertical 10-second unboxing ASMR: an adult's hands slowly open a plain box and lift out the product, soft window light.",
+       plan="unboxing ASMR: adult hands slowly cut the tape, open a plain box, lift out the product and set it down; every sound is close and satisfying.",
+       shots="Hands open a plain box; the {p} is slowly lifted out; it is set down and turned once."),
+    _f("colour_flatlay", "colour-pop flat lay", "music", "aesthetic", 1.1, "product",
+       audio="Voice: NO voice, no talking. Music: playful beat, product moves land on the beat.",
+       core="Vertical 10-second colour-pop flat lay: top-down view of the product on a bright coloured backdrop, moves landing on the beat.",
+       plan="a top-down colour-pop flat lay: the product on a bright coloured backdrop with a few simple props, cuts and moves landing on the beat.",
+       shots="Top-down view of the {p} on a bright backdrop; a quick beat-synced reposition; end on a neat full view."),
+    _f("stopmotion_pack", "stop-motion pop-in", "music", "animation", 1.1, "none", loose=True,
+       audio="Voice: NO voice, no talking. Music: playful stop-motion style tune.",
+       core="Vertical 10-second stop-motion pop-in: little props pop in around the product on the beat, then the product spins once.",
+       plan="a stop-motion pop-in where small colourful props pop in around the product (real shape and colours) on the beat, ending with one spin.",
+       shots="Small props pop in around the {p} on the beat; the {p} spins once; it settles with a tiny bounce."),
+    _f("diwali_sparkle", "festive sparkle", "music", "festive", 1.1, "product",
+       audio="Voice: NO voice, no talking. Music: warm festive instrumental.",
+       core="Vertical 10-second festive sparkle: warm golden lights, soft glow and shimmer around the product, slow camera.",
+       plan="a festive sparkle: warm golden fairy lights and a soft glow around the product, gentle shimmer, slow camera; no fire or real flames.",
+       shots="Golden lights twinkle; a slow move toward the {p}; a soft shimmer; end on the full view."),
+    _f("pet_reaction", "pet first reaction", "music", "pet_reaction", 1.5, "pet",
+       audio="Voice: NO voice, no talking. Music: playful cheerful instrumental, soft happy pet sounds.",
+       core="Vertical 10-second pet first reaction: a healthy adult pet meets the product, curious then happy, warm daylight.",
+       plan="a pet's first reaction: a healthy adult pet notices the product, is curious, then happily uses it exactly the way it is meant to be used; only real, possible actions.",
+       shots="The pet spots the {p}; it sniffs it curiously; a happy close-up of the pet with the {p}."),
+]
 BY_ID = {f["id"]: f for f in FORMATS}
 
 
@@ -260,12 +534,15 @@ ADULT_BRIEF = (" ADULT ANGLE: this product is usually sold for children, but THI
 
 
 def catalog():
-    """Every format with the video types it fits and whether it has a voice (used by the control page dropdown)."""
+    """Every format with the video types it fits, whether it has a voice and its group (used by the control page dropdown)."""
     out = []
     for f in FORMATS:
         out.append({"id": f["id"], "label": f["label"], "voice": f["voice"],
                     "audible": VOICE_PROPS[f["voice"]][0] != "none",
+                    "group": GROUP_OF.get(f["id"], "Story & talk"),
                     "types": [t for t, fn in VIDEO_TYPES.items() if fn(f)]})
+    order = {g: i for i, g in enumerate(GROUP_ORDER)}
+    out.sort(key=lambda x: order.get(x["group"], 99))        # stable: keeps the original order inside a group
     return out
 
 
@@ -348,10 +625,12 @@ def _fmt_people(f, product_mode, kids):   # kids = True means "do not show peopl
     return product_mode            # "product"
 
 
-def pick(p, r, product_mode="none", kids=False, hist=None, video_type=None, want_cta=None, adult_angle=False, audio=None, forced_format=None):
+def pick(p, r, product_mode="none", kids=False, hist=None, video_type=None, want_cta=None, adult_angle=False, audio=None, forced_format=None, show_price=None, lang=None):
     """Choose the style of the next reel. p, r are the product and the research dict (r["features"] = verified features).
     kids + adult_angle = a children's product that is shown with ADULTS only (the people choice is kept).
-    audio = "voice" (someone talks / narrates / sings) | "none" (music or sounds only) | "" (any). Default: AUDIO_MODE from the environment."""
+    audio = "voice" (someone talks / narrates / sings) | "none" (music or sounds only) | "" (any). Default: AUDIO_MODE from the environment.
+    show_price = True / False: may the video or caption mention the price? Default: SHOW_PRICE from the environment (off when unset).
+    lang = "english" | "hinglish" | "both": language of the viral line ideas. Default: TEXT_LANG from the environment (both)."""
     hist = _load() if hist is None else hist
     adult = bool(kids and adult_angle and product_mode in ADULT_SCENE)
     if adult:
@@ -406,6 +685,12 @@ def pick(p, r, product_mode="none", kids=False, hist=None, video_type=None, want
     used_cta = [h.get("cta") for h in hist[-3:]]
     cta = random.choice([c for c in CAPTION_CTAS if c not in used_cta] or CAPTION_CTAS)
     look = "Camera: %s, %s mood." % (camera, mood)
+    sp = bool(show_price if show_price is not None else _flag("SHOW_PRICE", False))
+    lang_used = _lang(lang)
+    ideas = hook_ideas(lang_used, sp, pet=(product_mode == "pet"))
+    trend = read_trends()
+    if ideas:
+        trend = ((trend + " | ") if trend else "") + "Viral line ideas (optional, adapt to the product, skip if they do not fit): " + " / ".join(ideas)
     people = _fmt_people(f, product_mode, kids)
     scene_rule, brief, plan = f["scene_rule"], f["brief"], f["plan"]
     adult = adult and people in ADULT_SCENE
@@ -422,8 +707,10 @@ def pick(p, r, product_mode="none", kids=False, hist=None, video_type=None, want
         "brief": brief, "plan": plan, "shots": f["shots"], "scene_rule": scene_rule,
         "voice_line": f["voice_line"], "audio_line": f["audio"],
         "yt_line": (f["core"] + " " + look).strip(), "look_extra": look,
-        "ad_brief": AD_BRIEF[ad], "caption_tone": AD_CAPTION[ad], "caption_cta": cta,
-        "setting": setting, "camera": camera, "mood": mood, "trend": read_trends(),
+        "ad_brief": AD_BRIEF[ad] + " " + (PRICE_ON if sp else PRICE_OFF),
+        "caption_tone": AD_CAPTION[ad] + PRICE_CAPTION[sp], "caption_cta": cta,
+        "show_price": sp, "text_lang": lang_used, "hook_ideas": ideas,
+        "setting": setting, "camera": camera, "mood": mood, "trend": trend,
     }
 
 
@@ -447,6 +734,8 @@ if __name__ == "__main__":
     h = _load()
     for i in range(n):
         s = pick({"name": "demo"}, {"features": ["demo feature"]}, "hands", False, hist=h)
+        if i == 0:
+            print("    ideas:", s["hook_ideas"], "| price:", s["show_price"], "| lang:", s["text_lang"])
         print("%2d) %-16s voice=%-8s job=%-12s ad=%-6s spoken_cta=%-5s check=%-8s | %s | %s | %s"
               % (i + 1, s["format"], s["voice"], s["job"], s["ad"], s["spoken_cta"], s["voice_check"],
                  s["setting"], s["camera"], s["mood"]))

@@ -1,0 +1,128 @@
+{
+ "ig": [
+  {
+   "rule": "On the final screen tap the caption box and type the caption BEFORE Share. Check that the text is in the box.",
+   "what": "The saved steps never typed the caption",
+   "count": 1,
+   "last": "2026-10-25 16:50"
+  },
+  {
+   "rule": "Keep tapping Next until the caption box and the Share button are visible.",
+   "what": "Did not end on the final Share screen (New reel composition screen with an empty caption field and a keyboard open).",
+   "count": 1,
+   "last": "2026-10-25 17:21"
+  },
+  {
+   "rule": "After tapping +, select the REEL tab and wait for the gallery grid before choosing a file.",
+   "what": "Opened the wrong creator screen.",
+   "count": 1,
+   "last": "2026-10-25 17:27"
+  },
+  {
+   "rule": "Only the gallery grid shows the duration (e.g. 0:08). After the video is selected the editor screens show NO duration: that is normal, never go back or restart because of it.",
+   "what": "Selected the video but thought it was a photo in the editor screen.",
+   "count": 6,
+   "last": "2026-10-25 17:33"
+  },
+  {
+   "rule": "In the gallery grid ONLY tap a thumbnail that shows a duration (the video). A thumbnail without a duration is a photo or screenshot: never tap it, even if it is the first one.",
+   "what": "Picked the image instead of the video in the grid (told by the user several times).",
+   "count": 4,
+   "last": "2026-10-25 23:17"
+  },
+  {
+   "rule": "Never tap Share unless the final screen shows the caption and a video.",
+   "what": "Shared while the user's note was still arriving",
+   "count": 4,
+   "last": "2026-10-26 10:43"
+  },
+  {
+   "rule": "After tapping the video thumbnail the Reel editor opens and shows NO duration: that is normal. Only go back if the screen is not the Reel flow at all.",
+   "what": "After picking the video the screen was not the Reel flow (A full-screen view of a portrait photo in a frame with an advertisement at the bottom.).",
+   "count": 1,
+   "last": "2026-10-26 23:51"
+  },
+  {
+   "rule": "The user corrected the bot (may be a one-off): you should have clicked back to close that advertisement and continue, whereas you reopened the instagram which is wrong",
+   "what": "you told the bot: you should have clicked back to close that advertisement and continue, whereas you reopened the instagram which is wrong",
+   "count": 1,
+   "last": "2026-10-26 23:53"
+  },
+  {
+   "rule": "Type the caption and confirm it is visible in the box before Share.",
+   "what": "The caption is still missing on the final screen.",
+   "count": 3,
+   "last": "2026-10-27 00:03"
+  }
+ ],
+ "auto": [
+  {
+   "rule": "The caption is given at the start of the task: type exactly that text, do not ask for it again. Tap the caption box (twice if needed) so the keyboard opens, then type.",
+   "what": "Bot hesitated to type and said the caption was not provided.",
+   "count": 3,
+   "last": "2026-10-25 22:15"
+  },
+  {
+   "rule": "Choose the video thumbnail that shows a duration. Never select the image.",
+   "what": "Selected the image instead of the video and reached the reel editor with it.",
+   "count": 3,
+   "last": "2026-10-25 23:17"
+  },
+  {
+   "rule": "The user corrected the bot (may be a one-off): reel is shared already",
+   "what": "you told the bot: reel is shared already",
+   "count": 1,
+   "last": "2026-10-26 11:30"
+  },
+  {
+   "rule": "The user corrected the bot (may be a one-off): reel sharing is done good job",
+   "what": "you told the bot: reel sharing is done good job",
+   "count": 1,
+   "last": "2026-10-26 11:30"
+  },
+  {
+   "rule": "The user corrected the bot (may be a one-off): wait 1 minute and try again, i need to use my phone",
+   "what": "you told the bot: wait 1 minute and try again, i need to use my phone",
+   "count": 1,
+   "last": "2026-10-27 00:03"
+  }
+ ],
+ "creator": [
+  {
+   "rule": "The user corrected the bot (may be a one-off): insta reel was shared, but why in the end you clicked on Share Reel button in the Reels tab?",
+   "what": "you told the bot: insta reel was shared, but why in the end you clicked on Share Reel button in the Reels tab?",
+   "count": 1,
+   "last": "2026-10-26 19:56"
+  },
+  {
+   "rule": "The user corrected the bot (may be a one-off): also for auto- dm first kill the meesho app and then reopen then go to Profile -> Creators Club Open button at the top right -> Select Auto-DM",
+   "what": "you told the bot: also for auto- dm first kill the meesho app and then reopen then go to Profile -> Creators Club Open button at the top right -> Select Auto-DM",
+   "count": 1,
+   "last": "2026-10-26 19:56"
+  },
+  {
+   "rule": "The user corrected the bot (may be a one-off): Profile icon is on the top left",
+   "what": "you told the bot: Profile icon is on the top left",
+   "count": 1,
+   "last": "2026-10-26 19:59"
+  },
+  {
+   "rule": "The user corrected the bot (may be a one-off): I clicked back, Open the Creators club again then select \"Select Products to DM\"",
+   "what": "you told the bot: I clicked back, Open the Creators club again then select \"Select Products to DM\"",
+   "count": 1,
+   "last": "2026-10-26 20:06"
+  },
+  {
+   "rule": "The user corrected the bot (may be a one-off): now select the first post recent one",
+   "what": "you told the bot: now select the first post recent one",
+   "count": 1,
+   "last": "2026-10-26 20:08"
+  },
+  {
+   "rule": "The user corrected the bot (may be a one-off): continue",
+   "what": "you told the bot: continue",
+   "count": 1,
+   "last": "2026-10-26 20:10"
+  }
+ ]
+}

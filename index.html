@@ -2,46 +2,587 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f3f5fa" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b1020" media="(prefers-color-scheme: dark)">
 <title>Affiliate Bot</title>
 <style>
-  :root { --bg:#f5f5f7; --card:#fff; --text:#1d1d1f; --muted:#6e6e73; --border:#d2d2d7; --accent:#2563eb; }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg:#111; --card:#1c1c1e; --text:#f2f2f2; --muted:#9a9aa0; --border:#3a3a3c; --accent:#3b82f6; }
+  :root {
+    --bg:#f3f5fa; --surface:#ffffff; --surface-2:#eef1f8; --text:#0f172a; --muted:#475569;
+    --border:#d9deea; --border-strong:#76829a; --accent:#2563eb; --accent-text:#1d4ed8; --accent-soft:#e8f0fe; --focus:#1d4ed8;
+    --ok:#15803d; --ok-bg:#dcfce7; --ok-text:#14532d;
+    --warn-bg:#fef3c7; --warn-text:#78350f; --warn-border:#d97706;
+    --bad:#b91c1c; --bad-bg:#fee2e2; --bad-text:#7f1d1d;
+    --idle-bg:#e2e8f0; --idle-text:#1e293b;
+    --radius:16px; --shadow:0 1px 2px rgba(15,23,42,.06), 0 6px 20px rgba(15,23,42,.06);
   }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--text); font-family:system-ui,-apple-system,Segoe UI,sans-serif; }
-  .wrap { max-width:720px; margin:0 auto; padding:16px; }
-  h1 { font-size:22px; margin:8px 0 16px; }
-  .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px; margin-bottom:16px; }
-  label { display:block; font-size:13px; color:var(--muted); margin:12px 0 4px; }
-  input[type=text], select { width:100%; padding:10px; font-size:16px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--text); }
-  .check { display:flex; align-items:center; gap:8px; margin-top:12px; font-size:15px; }
-  .check input { width:18px; height:18px; }
-  button { width:100%; margin-top:16px; padding:12px; font-size:16px; border:0; border-radius:8px; background:var(--accent); color:#fff; cursor:pointer; }
-  button:disabled { opacity:.5; cursor:not-allowed; }
-  .row { display:flex; justify-content:space-between; align-items:center; }
-  .badge { font-size:12px; padding:3px 10px; border-radius:99px; background:var(--border); }
-  .badge.running { background:#f59e0b; color:#000; } .badge.done { background:#16a34a; color:#fff; } .badge.error { background:#dc2626; color:#fff; } .badge.stopped { background:#6b7280; color:#fff; }
-  .btns { display:flex; gap:10px; } .btns button { margin-top:16px; flex:1; } button.stop { background:#dc2626; } button.again { background:#16a34a; }
-  pre { margin:12px 0 0; background:#0b0b0c; color:#d4f7d4; padding:12px; border-radius:8px; height:340px; overflow:auto; font-size:12px; white-space:pre-wrap; word-break:break-word; }
-  .err { color:#dc2626; font-size:14px; margin-top:8px; }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#0b1020; --surface:#141a2e; --surface-2:#1b2340; --text:#e8ecf8; --muted:#a8b3cc;
+      --border:#2b3558; --border-strong:#6b7aa0; --accent:#2563eb; --accent-text:#93c5fd; --accent-soft:#1e2a52; --focus:#93c5fd;
+      --ok:#15803d; --ok-bg:#052e16; --ok-text:#bbf7d0;
+      --warn-bg:#451a03; --warn-text:#fde68a; --warn-border:#f59e0b;
+      --bad:#b91c1c; --bad-bg:#450a0a; --bad-text:#fecaca;
+      --idle-bg:#1e293b; --idle-text:#cbd5e1;
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.3);
+    }
+  }
+  * { box-sizing:border-box; }
+  html { -webkit-text-size-adjust:100%; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif; }
+  h1,h2,h3,p { margin:0; }
+  button,input,select,textarea { font:inherit; color:inherit; }
+  fieldset { border:0; margin:0; padding:0; min-width:0; }
+  legend { padding:0; }
+  :focus-visible { outline:3px solid var(--focus); outline-offset:2px; }
+
+  .sr-only { position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+  .skip { position:absolute; left:12px; top:-60px; z-index:100; background:var(--accent); color:#fff; padding:10px 16px; border-radius:10px; text-decoration:none; font-weight:600; }
+  .skip:focus { top:12px; }
+
+  /* ---- header + tabs ---- */
+  .top { position:sticky; top:0; z-index:20; background:var(--bg); border-bottom:1px solid var(--border); padding-top:env(safe-area-inset-top); }
+  .top .in { max-width:760px; margin:0 auto; padding:12px 16px 8px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .brand { display:flex; align-items:center; gap:10px; min-width:0; }
+  .logo { width:36px; height:36px; border-radius:10px; background:var(--accent); color:#fff; display:grid; place-items:center; font-size:18px; flex:none; }
+  h1 { font-size:19px; line-height:1.2; font-weight:700; }
+  .live { font-size:12px; color:var(--muted); display:flex; align-items:center; gap:6px; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--ok); display:inline-block; }
+  .dot.off { background:var(--warn-border); }
+  .tabs { max-width:760px; margin:0 auto; padding:0 16px 10px; display:flex; gap:8px; }
+  .tab { flex:1; min-height:46px; border-radius:12px; border:1.5px solid transparent; background:transparent; color:var(--muted); font-weight:600; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:8px; }
+  .tab:hover { background:var(--surface-2); }
+  .tab[aria-selected="true"] { background:var(--accent-soft); color:var(--accent-text); border-color:var(--accent); }
+
+  .pill { display:inline-flex; align-items:center; gap:6px; font-size:13px; font-weight:600; padding:4px 12px; border-radius:999px; background:var(--idle-bg); color:var(--idle-text); white-space:nowrap; }
+  .pill.running { background:var(--warn-bg); color:var(--warn-text); }
+  .pill.done { background:var(--ok-bg); color:var(--ok-text); }
+  .pill.error { background:var(--bad-bg); color:var(--bad-text); }
+  .spin { width:12px; height:12px; border-radius:50%; border:2px solid currentColor; border-right-color:transparent; animation:spin .8s linear infinite; display:inline-block; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  /* ---- layout + cards ---- */
+  main { max-width:760px; margin:0 auto; padding:16px 16px calc(120px + env(safe-area-inset-bottom)); }
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:18px; margin-bottom:16px; box-shadow:var(--shadow); }
+  .sec-head { display:flex; gap:12px; align-items:flex-start; margin-bottom:6px; }
+  .num { width:28px; height:28px; border-radius:50%; background:var(--accent); color:#fff; display:grid; place-items:center; font-weight:700; font-size:14px; flex:none; margin-top:1px; }
+  h2 { font-size:18px; line-height:1.3; font-weight:700; }
+  .sub { color:var(--muted); font-size:14px; margin-top:2px; }
+  .row { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  .stack > * + * { margin-top:12px; }
+
+  /* ---- form controls ---- */
+  .field { margin-top:18px; }
+  .field > label, .field > legend, .lbl { display:block; font-weight:600; font-size:14px; margin-bottom:8px; }
+  .opt { font-weight:400; color:var(--muted); }
+  input[type=text], select, textarea { width:100%; min-height:48px; padding:12px 14px; font-size:16px; border:1.5px solid var(--border-strong); border-radius:12px; background:var(--surface); color:var(--text); font-family:inherit; }
+  textarea { resize:vertical; line-height:1.5; }
+  select { appearance:none; -webkit-appearance:none; padding-right:42px; background-image:linear-gradient(45deg, transparent 50%, var(--muted) 50%), linear-gradient(135deg, var(--muted) 50%, transparent 50%); background-position:calc(100% - 22px) 52%, calc(100% - 16px) 52%; background-size:6px 6px, 6px 6px; background-repeat:no-repeat; }
+  input::placeholder, textarea::placeholder { color:var(--muted); opacity:.9; }
+  [aria-invalid="true"] { border-color:var(--bad); }
+  .hint { font-size:13px; color:var(--muted); margin-top:6px; }
+  .err-text { font-size:13px; color:var(--bad-text); background:var(--bad-bg); padding:6px 10px; border-radius:8px; margin-top:8px; display:flex; gap:6px; }
+  .counter { font-size:12px; color:var(--muted); text-align:right; margin-top:4px; }
+
+  .choices { display:grid; gap:10px; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); }
+  .choices.one { grid-template-columns:1fr; }
+  .choice { position:relative; display:block; }
+  .choice input { position:absolute; inset:0; width:100%; height:100%; margin:0; opacity:0; cursor:pointer; z-index:1; }
+  .choice .box { display:block; position:relative; min-height:58px; padding:12px 40px 12px 14px; border:1.5px solid var(--border-strong); border-radius:14px; background:var(--surface); transition:border-color .15s, background .15s; }
+  .choice .box b { display:block; font-size:15px; }
+  .choice .box small { display:block; margin-top:2px; font-size:13px; line-height:1.35; color:var(--muted); }
+  .choice .box::after { content:""; position:absolute; right:12px; top:14px; width:20px; height:20px; border-radius:50%; border:2px solid var(--border-strong); background:var(--surface); }
+  .choice input:checked + .box { border-color:var(--accent); background:var(--accent-soft); box-shadow:0 0 0 1px var(--accent) inset; }
+  .choice input:checked + .box::after { content:"\2713"; border-color:var(--accent); background:var(--accent); color:#fff; font-size:13px; line-height:16px; text-align:center; font-weight:700; }
+  .choice input:focus-visible + .box { outline:3px solid var(--focus); outline-offset:2px; }
+  .choice input:disabled { cursor:not-allowed; }
+  .choice input:disabled + .box { opacity:.55; }
+
+  .check { display:flex; gap:12px; align-items:flex-start; padding:10px 0; min-height:44px; cursor:pointer; }
+  .check input { width:22px; height:22px; margin:1px 0 0; accent-color:var(--accent); flex:none; cursor:pointer; }
+  .check input:disabled { cursor:not-allowed; }
+  .check.off { opacity:.55; cursor:not-allowed; }
+  .check.sub { margin-left:34px; padding-top:0; }
+  .check span small { display:block; color:var(--muted); font-size:13px; }
+
+  details.more { margin-top:18px; border:1.5px solid var(--border); border-radius:14px; padding:0 14px; }
+  details.more > summary { min-height:48px; display:flex; align-items:center; justify-content:space-between; cursor:pointer; font-weight:600; list-style:none; }
+  details.more > summary::-webkit-details-marker { display:none; }
+  details.more > summary::after { content:"\25BE"; color:var(--muted); transition:transform .15s; }
+  details.more[open] > summary::after { transform:rotate(180deg); }
+  details.more > .body { padding-bottom:14px; }
+  .grp { font-size:13px; font-weight:600; color:var(--muted); margin-top:10px; }
+  .panel { margin-top:10px; padding:4px 14px 12px; border:1.5px solid var(--border); border-radius:12px; background:var(--surface-2); }
+
+  .lines { display:flex; flex-wrap:wrap; gap:8px; padding:2px 0 12px; }
+  .line { min-height:44px; padding:8px 14px; border-radius:999px; border:1.5px solid var(--border-strong); background:var(--surface); cursor:pointer; text-align:left; font-size:15px; line-height:1.3; }
+  .line:hover { border-color:var(--accent); }
+  .line:focus-visible { outline:3px solid var(--focus); outline-offset:2px; }
+  .line.on { background:var(--accent-soft); border-color:var(--accent); color:var(--accent-text); font-weight:600; }
+  .line small { display:block; font-size:11px; font-weight:600; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+  details.more details.more { background:var(--surface-2); margin-top:10px; }
+
+  /* ---- buttons ---- */
+  .btn { min-height:48px; padding:0 20px; border-radius:12px; border:0; font-weight:600; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:8px; background:var(--accent); color:#fff; }
+  .btn:hover { filter:brightness(1.08); }
+  .btn.danger { background:var(--bad); } .btn.success { background:var(--ok); }
+  .btn.ghost { background:transparent; color:var(--accent-text); border:1.5px solid var(--border-strong); }
+  .btn.small { min-height:44px; padding:0 16px; font-size:15px; }
+  .btn.block { width:100%; margin-top:14px; }
+  .btn:disabled { opacity:.5; cursor:not-allowed; filter:none; }
+  .bar { position:fixed; left:0; right:0; bottom:0; z-index:30; background:var(--surface); border-top:1px solid var(--border); padding:12px 16px calc(12px + env(safe-area-inset-bottom)); box-shadow:0 -6px 20px rgba(15,23,42,.08); }
+  .bar .in { max-width:760px; margin:0 auto; display:flex; gap:10px; }
+  .bar .btn { flex:1; }
+  .toast { position:fixed; left:50%; transform:translateX(-50%); bottom:calc(92px + env(safe-area-inset-bottom)); background:#0f172a; color:#fff; padding:10px 18px; border-radius:999px; z-index:40; font-size:14px; font-weight:600; box-shadow:var(--shadow); }
+  .toast:empty { display:none; }
+
+  /* ---- alerts, phone banner, progress ---- */
+  .alert { border-radius:14px; padding:12px 14px; margin-bottom:16px; background:var(--bad-bg); color:var(--bad-text); border:1.5px solid var(--bad); }
+  .alert.info { background:var(--accent-soft); color:var(--text); border-color:var(--accent); display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+  .phone { display:flex; gap:12px; align-items:flex-start; border-radius:var(--radius); padding:14px 16px; margin-bottom:16px; border:2px solid; }
+  .phone .ic { font-size:26px; line-height:1; }
+  .phone b { display:block; font-size:17px; margin-bottom:2px; }
+  .phone span.t { font-size:14px; }
+  .phone.free { background:var(--ok-bg); border-color:var(--ok); color:var(--ok-text); }
+  .phone.soon { background:var(--warn-bg); border-color:var(--warn-border); color:var(--warn-text); }
+  .phone.busy { background:var(--bad-bg); border-color:var(--bad); color:var(--bad-text); }
+  .bignum { font-variant-numeric:tabular-nums; }
+
+  .progress { height:12px; border-radius:999px; background:var(--surface-2); overflow:hidden; margin-top:14px; border:1px solid var(--border); }
+  .progress > div { height:100%; border-radius:999px; background:var(--accent); transition:width .4s ease; }
+  .progress.ok > div { background:var(--ok); } .progress.bad > div { background:var(--bad); }
+  .progress.indet > div { width:40% !important; animation:slide 1.4s ease-in-out infinite; }
+  @keyframes slide { 0% { margin-left:-40%; } 100% { margin-left:100%; } }
+  .meta { display:flex; justify-content:space-between; gap:12px; font-size:13px; color:var(--muted); margin-top:8px; }
+  .now { margin-top:12px; font-size:14px; background:var(--surface-2); border-radius:10px; padding:10px 12px; word-break:break-word; }
+
+  .out { width:100%; margin-top:12px; background:var(--surface-2); font-size:14px; min-height:150px; }
+  pre.term { margin:12px 0 0; background:#0b1020; color:#d6f5e3; padding:12px; border-radius:12px; height:320px; overflow:auto; font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:pre-wrap; word-break:break-word; border:1px solid var(--border); }
+  pre.term.blue { color:#bfdbfe; height:240px; }
+
+  .empty { text-align:center; padding:28px 16px; }
+  .empty .big { font-size:40px; }
+
+  /* ---- history ---- */
+  .filters { display:grid; grid-template-columns:1fr; gap:10px; margin-top:14px; }
+  @media (min-width:560px) { .filters { grid-template-columns:2fr 1fr; } }
+  .h-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+  .h-actions .btn, .h-actions a.btn { flex:1 1 120px; text-decoration:none; }
+  .h-top { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+  .h-date { font-size:13px; color:var(--muted); }
+  .h-title { font-size:16px; font-weight:700; line-height:1.35; word-break:break-word; margin-top:8px; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+  .chip { font-size:12px; font-weight:600; padding:3px 10px; border-radius:999px; background:var(--surface-2); color:var(--muted); border:1px solid var(--border); }
+  .chip.good { background:var(--ok-bg); color:var(--ok-text); border-color:var(--ok); }
+  .lnk { color:var(--accent-text); word-break:break-all; font-size:14px; }
+  .pathbox { font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; word-break:break-all; background:var(--surface-2); padding:8px 10px; border-radius:10px; border:1px solid var(--border); }
+  .confirm { background:var(--bad-bg); color:var(--bad-text); border:1.5px solid var(--bad); border-radius:12px; padding:10px 12px; margin-top:12px; }
+  .h-body { margin-top:6px; border-top:1px solid var(--border); padding-top:4px; }
+  @media (max-width:480px) { .tab { font-size:13px; gap:4px; padding:0 4px; line-height:1.2; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration:.001ms !important; animation-iteration-count:1 !important; transition-duration:.001ms !important; }
+    .progress.indet > div { margin-left:0; width:100% !important; opacity:.5; }
+  }
+  @media (max-width:420px) { .choices { grid-template-columns:1fr 1fr; } .choices.one { grid-template-columns:1fr; } }
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js"></script>
 </head>
 <body>
+<a class="skip" href="#main">Skip to the main content</a>
+<noscript>This page needs JavaScript to run the bot.</noscript>
 <div id="root"></div>
 <script type="text/babel">
 const { useState, useEffect, useRef } = React;
 
+/* ------------------------------------------------------------------ data ---- */
+const ACTIONS = [
+  { value: 'prompt', icon: '\u{1F4DD}', label: 'Prompt and caption only', sub: 'Get the YouTube Create prompt and the Instagram caption. The phone is not needed.' },
+  { value: 'video', icon: '\u{1F3AC}', label: 'Make the video', sub: 'Prompt, caption and the video, made on your phone.' },
+  { value: 'post', icon: '\u{1F4E4}', label: 'Make it and post to Instagram', sub: 'Everything above, then posts the Reel on Instagram.' },
+  { value: 'autodm', icon: '\u{1F4AC}', label: 'Post it and turn on the auto-DM', sub: 'Everything above, then opens the Meesho app and turns on the auto-DM for that Reel.' },
+  { value: 'autodmonly', icon: '\u{1F9EA}', label: 'Only the auto-DM (for testing)', sub: 'Makes and posts nothing. Wishlists the product again, then opens Meesho Creator Club and links the auto-DM to your most recent Instagram post.' },
+  { value: 'reelpost', icon: '\u{1F4F2}', label: 'Only post a Reel on Instagram', sub: 'Makes nothing new. Posts the newest video in the phone\u2019s gallery, with the caption you type. No product link needed.' },
+];
+const VIDEO_TYPES = [
+  { value: 'hands', icon: '\u{1F64C}', label: 'Hands', sub: 'Adult hands show the product, no face' },
+  { value: 'person', icon: '\u{1F9D1}', label: 'Person', sub: 'One adult shows or uses it' },
+  { value: 'pet', icon: '\u{1F43E}', label: 'Pet', sub: 'A pet plays with it' },
+  { value: 'animated', icon: '\u2728', label: 'Animated', sub: 'Cartoon or 3D look' },
+];
+const VOICES = [
+  { value: 'auto', icon: '\u{1F3B2}', label: 'Auto', sub: 'Picked at random' },
+  { value: 'voice', icon: '\u{1F5E3}', label: 'Voice on', sub: 'Someone talks, narrates or sings' },
+  { value: 'none', icon: '\u{1F507}', label: 'Voice off', sub: 'Music or natural sounds only' },
+];
+const CONNECT = [
+  { value: 'auto', label: 'Auto connect', sub: 'Open this page on the phone itself' },
+  { value: 'manual', label: 'Manual', sub: 'Enter the ADB details, for example from the PC' },
+];
+// texts that can be shown on the video (max 3)
+const OVERLAY_GROUPS = [
+  { title: 'About the product', items: [['name', 'Product name (short)'], ['cute', 'Cute caption made from the product'], ['hook', 'Hook text (e.g. \u201cWait for it\u201d)'], ['feature', 'One real feature (from the product page)']] },
+  { title: 'Call to action', items: [['comment', 'Comment LINK'], ['dm', 'Then \u201CLink in your DM\u201D', 'comment'], ['follow', 'Follow for more'], ['bio', 'Shop link in bio']] },
+];
+const OVERLAY_NEEDS = { dm: 'comment' };      // \u201CLink in your DM\u201D makes no sense alone: it needs \u201CComment LINK\u201D
+const cleanOv = o => { const a = Array.isArray(o) ? o : []; return a.filter(x => !OVERLAY_NEEDS[x] || a.includes(OVERLAY_NEEDS[x])); };
+const OVERLAY_MAX = 3;
+const PRICE_ITEM = ['price', 'Price (from the product page)'];
+// ready-made viral lines inside \u201CShow text on the video\u201D, tap one to use it as the text (max 40 characters). Same lines as TEXT_LIBRARY in reel_styles.py.
+// Hinglish is written the way people really talk, not translated word by word. [id, icon, title, [[English, Hinglish], ...]]
+const TEXT_LIB = [["gifting", "\ud83c\udf81", "Gifting", [["Your girlfriend deserves this!", "Aapki girlfriend ye deserve karti hai!"], ["Your boyfriend needs this too", "Aapke boyfriend ko bhi ye chahiye"], ["A gift he will actually use", "Aisa gift jo wo sach mein use karega"], ["Mom deserves a better gift", "Mummy ko achha gift toh banta hai"], ["Gift this to your sister", "Apni didi ko ye gift karo"], ["Best friend's birthday, sorted", "Bestie ke birthday ka gift sorted"], ["Stop gifting boring stuff", "Ab boring gift dena band karo"], ["Send this to the one who needs it", "Ye usko bhejo jise ye chahiye"], ["Surprise someone today", "Aaj kisi ko surprise de do"], ["The gift she will not forget", "Ye gift wo kabhi nahi bhoolegi"]]], ["couple", "\ud83d\udc95", "Couples and love", [["For the one you love", "Aapke special person ke liye"], ["Anniversary gift idea", "Anniversary ke liye gift idea"], ["Valentine's gift, sorted", "Valentine's ka gift sorted hai"], ["Surprise your partner", "Apne partner ko surprise do"], ["Tag your special person", "Apne special person ko tag karo"], ["Make her smile today", "Aaj use khush kar do"], ["He will love this", "Use ye bahut pasand aayega"]]], ["pov", "\ud83c\udfac", "POV", [["POV: you found the cutest thing", "POV: aapko sabse cute cheez mil gayi"], ["POV: your friend sees this on your desk", "POV: dost ne desk par ye dekh liya"], ["POV: Mummy finds this in your cart", "POV: Mummy ne aapke cart mein ye dekha"], ["POV: you nailed the gift this time", "POV: is baar gift ekdum perfect nikla"], ["POV: you needed this all along", "POV: ye toh kab se chahiye tha"], ["POV: she opens your gift", "POV: wo aapka gift khol rahi hai"], ["POV: your room finally looks cute", "POV: aapka room ab cute lag raha hai"]]], ["funny", "\ud83d\ude02", "Funny desi", [["Mummy: another purchase? Me: yes", "Mummy: phir shopping? Main: haan"], ["Bro asked for it, now what", "Bhai ne maang liya, ab kya karun"], ["My wallet vs this cute thing", "Mera wallet vs ye cute cheez"], ["Adding to cart at 2 AM", "Raat ke 2 baje cart mein daal diya"], ["Not me buying this again", "Phir se le aaya main, kya karun"], ["Me: no more shopping. Also me:", "Main: ab shopping nahi. Phir main:"], ["Salary came, cart is ready", "Salary aayi, cart pehle se ready hai"], ["Do not tell Mummy about this", "Mummy ko mat batana"]]], ["hook", "\u26a1", "Stop scrolling", [["Stop scrolling, you need this", "Ruko, scroll mat karo, ye dekho"], ["Save this before you forget", "Save kar lo, warna bhool jaoge"], ["Everyone is buying this", "Aajkal sab ye hi le rahe hain"], ["Found it so you do not have to", "Maine dhundh liya, aap bas le lo"], ["This did not go viral for nothing", "Ye yun hi viral nahi hua"], ["Trending right now", "Abhi sabse zyada trending"], ["Hidden gem alert", "Ek hidden gem mil gaya"]]], ["curious", "\ud83d\ude2e", "Curiosity and wait for it", [["Wait for it...", "Ruko zara, aage dekho..."], ["Did you know this existed?", "Aapko pata tha ye bhi aata hai?"], ["You won't believe what this does", "Yakeen nahi hoga ye kya karta hai"], ["Watch till the end", "End tak zaroor dekhna"], ["Wait, what is this?!", "Ruko, ye kya hai?!"], ["Guess what this is", "Guess karo ye kya hai"], ["Nobody told me about this", "Mujhe kisi ne bataya hi nahi"]]], ["confess", "\ud83e\udd2b", "Confession and proof", [["I did not expect this to be so good", "Sach bolun? Itna achha expect nahi tha"], ["Everyone asks where I got this", "Sab pooch rahe hain kahan se liya"], ["Bought for one reason, loved for more", "Ek wajah se liya, ab har wajah se pasand"], ["Don't tell anyone, but...", "Kisi ko batana mat, lekin..."], ["Small find, big smile", "Chhoti si find, badi si smile"], ["Okay, I get the hype now", "Ab samajh aaya hype kyun hai"]]], ["self", "\ud83d\udc85", "Treat yourself", [["You deserve this", "Aap ye deserve karte ho"], ["Treat yourself today", "Aaj khud ko treat de do"], ["Self-love, but make it cute", "Self-love, thoda cute wala"], ["Add this to your wishlist", "Isse apni wishlist mein daal lo"], ["Your sign to buy it", "Ye lo, lene ka sign mil gaya"]]], ["desk", "\ud83d\udda5\ufe0f", "Desk, room and aesthetic", [["Desk setup, upgraded", "Desk setup ab upgrade ho gaya"], ["Cute room corner", "Room ka cute corner"], ["Aesthetic find of the day", "Aaj ki sabse aesthetic find"], ["Your desk needed this", "Aapke desk ko ye chahiye tha"], ["This makes any corner cute", "Isse har corner cute lagta hai"], ["Instagram-worthy find", "Ekdum Instagram-worthy find"]]], ["debate", "\u2753", "Questions and comments", [["Keep it or return it?", "Aap rakhoge ya return karoge?"], ["Rate this out of 10", "Isko 10 mein se kitne doge?"], ["Tag someone who needs this", "Jisko ye chahiye use tag karo"], ["Save this for your next shopping", "Agli shopping ke liye save kar lo"], ["Comment if you want this", "Chahiye toh comment karo"], ["Would you buy this?", "Aap ye kharidoge?"], ["Yes or no?", "Haan ya na?"]]], ["festive", "\ud83e\ude94", "Festive and seasonal", [["Diwali gift sorted", "Diwali ka gift sorted hai"], ["Festive mood: on", "Festive mood on hai"], ["Cute gift for Bhai Dooj", "Bhai Dooj ke liye cute gift"], ["Karwa Chauth gift idea", "Karwa Chauth ke liye gift idea"], ["Wedding season find", "Shaadi season ki best find"], ["Rakhi gift idea", "Rakhi ke liye gift idea"], ["Secret Santa idea", "Secret Santa ke liye perfect"], ["Diwali gifting made easy", "Diwali ka gift ab easy hai"]]], ["pet", "\ud83d\udc3e", "Pet", [["Your pet deserves this", "Aapka pet ye deserve karta hai"], ["My dog approved this", "Mere dog ne ye approve kar diya"], ["Pet parents, you need this", "Pet parents, ye aapke liye hai"], ["Cat approved. Finally.", "Cat ne approve kar diya, finally"], ["Your furry baby will love it", "Aapke furry baby ko ye pasand aayega"], ["A must-have for pet parents", "Har pet parent ke liye must-have"]]], ["price", "\ud83d\udcb0", "Price lines (only when price is ON)", [["Budget-friendly gift", "Budget mein perfect gift"], ["Cheaper than your coffee", "Aapki coffee se bhi sasta"], ["Pocket-friendly find", "Pocket ke liye ekdum sahi"], ["Yes, it is this affordable", "Haan, sach mein itna sasta hai"], ["Big joy, small price", "Kam price, zyada khushi"]]], ["cta", "\ud83d\udce9", "Call to action (full lines)", [["Comment LINK, get it in your DM", "LINK comment karo, DM mein mil jayega"], ["Comment LINK and check your DM", "LINK comment karo, phir DM check karo"], ["Want it? Comment LINK", "Chahiye? Comment mein LINK likho"], ["Comment LINK, link lands in your DM", "LINK comment karo, link DM mein aayega"], ["Follow for more finds like this", "Aise aur finds ke liye follow karo"], ["Shop link in bio", "Shop link bio mein hai"]]]];
+const TEXT_LANGS = [
+  { value: 'both', label: 'English + Hinglish', sub: 'Show both, the AI mixes them' },
+  { value: 'english', label: 'English', sub: 'English lines only' },
+  { value: 'hinglish', label: 'Hinglish', sub: 'Hinglish lines only' },
+];
+const STATUS_TEXT = { idle: 'Ready', running: 'Running', done: 'Finished', error: 'Error', stopped: 'Stopped' };
+const STATUS_ICON = { idle: '\u25CB', done: '\u2713', error: '!', stopped: '\u25A0' };
+const ADDR = /^[\w.\-]+:\d{2,5}$/, PIN = /^\d{4,8}$/;
+const FIELD_IDS = { caption: 'f-caption', productLink: 'f-product', connectLink: 'f-connect', pairLink: 'f-pairlink', pairPin: 'f-pin', customStyle: 'f-custom', overlay: 'ov-name', overlayCustom: 'f-ovcustom' };
+
+// the same rules as server.js, so mistakes show up next to the field before anything is sent
+function validate(f) {
+  const e = {};
+  let urlOk = false;
+  try { const u = new URL(f.productLink); urlOk = /^https?:$/.test(u.protocol) && !/["'`&|<>^\s]/.test(f.productLink); } catch (x) {}
+  if (f.mode === 'reelpost') {
+    if (!f.caption.trim()) e.caption = 'Type the caption for the Reel.';
+    else if (f.caption.length > 2200) e.caption = 'Instagram allows at most 2,200 characters.';
+  }
+  else if (!f.productLink) e.productLink = 'Paste the product link.';
+  else if (!urlOk) e.productLink = 'This link does not work here. It must start with http:// or https:// and must not contain & or spaces. Try copying the share link again, or remove everything after the ? sign.';
+  if (f.mode !== 'prompt') {
+    if (f.pairPin && !PIN.test(f.pairPin)) e.pairPin = 'The PIN has 4 to 8 digits.';
+    if (f.connectMode === 'manual') {
+      if (!ADDR.test(f.connectLink || '')) e.connectLink = 'Enter the connect link as ip:port, for example 192.168.1.5:41234.';
+      if (f.pairLink && !ADDR.test(f.pairLink)) e.pairLink = 'Use the form ip:port, for example 192.168.1.5:37123.';
+      if ((f.pairLink || f.pairPin) && !(f.pairLink && f.pairPin)) { if (!f.pairLink) e.pairLink = 'For pairing, fill both the pair link and the PIN.'; else if (!e.pairPin) e.pairPin = 'For pairing, fill both the pair link and the PIN.'; }
+    }
+  }
+  if (f.mode !== 'reelpost' && f.mode !== 'autodmonly' && f.reelFormat === 'custom' && !f.customStyle.trim()) e.customStyle = 'Describe your style, or pick another one.';
+  if (f.mode !== 'reelpost' && f.mode !== 'autodmonly' && f.textOverlay) {
+    if (!f.overlayOpts.length) e.overlay = 'Pick at least one text, or turn off \u201CText on the video\u201D.';
+    if (f.overlayOpts.includes('custom') && !f.overlayCustom.trim()) e.overlayCustom = 'Type your text, or pick a viral line below.';
+    if (f.overlayOpts.includes('dm') && !f.overlayOpts.includes('comment')) e.overlay = '\u201CLink in your DM\u201D goes together with \u201CComment LINK\u201D. Tick Comment LINK too, or untick it.';
+  }
+  return e;
+}
+
+// "3/5 Product ki photos ..." lines in the log give a step counter
+function parseProgress(lines) {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = /^\s*(\d+)\/(\d+)\s+(\S.*)$/.exec(lines[i]);
+    if (m) { const n = +m[1], t = +m[2]; if (t >= 3 && t <= 9 && n >= 1 && n <= t) return { n, t, text: m[3] }; }
+  }
+  return null;
+}
+const mmss = ms => { const s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+
+/* ------------------------------------------------------------ components ---- */
+function Choices({ name, legend, value, onChange, options, hint, one }) {
+  const hid = name + '-hint';
+  return (
+    <fieldset className="field" aria-describedby={hint ? hid : undefined}>
+      <legend className="lbl">{legend}</legend>
+      <div className={'choices' + (one ? ' one' : '')}>
+        {options.map(o => (
+          <label className="choice" key={o.value}>
+            <input type="radio" name={name} value={o.value} checked={value === o.value} onChange={() => onChange(o.value)} />
+            <span className="box"><b>{o.icon && <span aria-hidden="true">{o.icon} </span>}{o.label}</b>{o.sub && <small>{o.sub}</small>}</span>
+          </label>
+        ))}
+      </div>
+      {hint && <div className="hint" id={hid}>{hint}</div>}
+    </fieldset>
+  );
+}
+
+// ready-made viral lines, one collapsible section per category; a tap puts the line into "My own text"
+function TextLibrary({ lang, showPrice, current, onPick }) {
+  return (
+    <div>
+      {TEXT_LIB.filter(c => showPrice || c[0] !== 'price').map(([id, icon, title, lines]) => (
+        <details className="more" key={id}>
+          <summary><span><span aria-hidden="true">{icon} </span>{title} <span className="opt">({lines.length})</span></span></summary>
+          <div className="body">
+            <div className="lines">
+              {lines.map(([en, hi]) => [lang !== 'hinglish' && ['English', en], lang !== 'english' && ['Hinglish', hi]].filter(Boolean).map(([tag, text]) => (
+                <button type="button" key={tag + text} className={'line' + (current === text ? ' on' : '')} aria-pressed={current === text} onClick={() => onPick(text)}>
+                  {lang === 'both' && <small>{tag}</small>}{text}
+                </button>
+              )))}
+            </div>
+          </div>
+        </details>
+      ))}
+    </div>
+  );
+}
+
+function Field({ id, label, optional, hint, error, children }) {
+  return (
+    <div className="field">
+      <label className="lbl" htmlFor={id}>{label}{optional && <span className="opt"> (optional)</span>}</label>
+      {children}
+      {hint && <div className="hint" id={id + '-hint'}>{hint}</div>}
+      {error && <div className="err-text" id={id + '-err'} role="alert"><span aria-hidden="true">{'\u26A0'}</span><span>{error}</span></div>}
+    </div>
+  );
+}
+
+function Section({ n, title, sub, children }) {
+  const id = 'sec-' + n;
+  return (
+    <section className="card" aria-labelledby={id}>
+      <div className="sec-head"><span className="num" aria-hidden="true">{n}</span><div><h2 id={id}>{title}</h2>{sub && <p className="sub">{sub}</p>}</div></div>
+      {children}
+    </section>
+  );
+}
+
+function CopyCard({ id, title, count, text, boxRef, onCopy, copied, rows }) {
+  return (
+    <section className="card" aria-labelledby={id}>
+      <div className="row"><h2 id={id}>{title} <span className="opt">({count} characters)</span></h2>
+        <button className="btn ghost small" onClick={onCopy} aria-label={'Copy: ' + title}>{copied ? '\u2713 Copied' : 'Copy'}</button></div>
+      <label className="sr-only" htmlFor={id + '-text'}>{title}</label>
+      <textarea id={id + '-text'} className="out" ref={boxRef} readOnly rows={rows} value={text} />
+    </section>
+  );
+}
+
+/* ----------------------------------------------------------------- history ---- */
+const HIST_FILTERS = [['all', 'All runs'], ['done', 'Finished'], ['error', 'Failed'], ['stopped', 'Stopped'], ['posted', 'Posted to Instagram'], ['video', 'Has a video file']];
+const MODE_LABEL = { prompt: 'Prompt + caption', video: 'Video', post: 'Video + Instagram', autodm: 'Video + Instagram + auto-DM', autodmonly: 'Auto-DM only (test)', reelpost: 'Reel from the gallery' };
+const dateText = ms => (ms ? new Date(ms).toLocaleString([], { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
+const cap1 = s => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+
+function HistCopy({ id, title, text, rows, flash }) {
+  const ref = useRef(null);
+  const [done, setDone] = useState(false);
+  function copy() {
+    const t = ref.current; if (!t) return;
+    t.focus(); t.select(); t.setSelectionRange(0, 99999);
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) {}
+    if (!ok && navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
+    setDone(true); setTimeout(() => setDone(false), 1800); flash(title + ' copied');
+  }
+  return (
+    <div className="field">
+      <div className="row">
+        <label className="lbl" htmlFor={id} style={{ margin: 0 }}>{title} <span className="opt">({text.length} characters)</span></label>
+        <button className="btn ghost small" onClick={copy} aria-label={'Copy: ' + title}>{done ? '\u2713 Copied' : 'Copy'}</button>
+      </div>
+      <textarea id={id} ref={ref} className="out" style={{ minHeight: 0, marginTop: 8 }} readOnly rows={rows} value={text} />
+    </div>
+  );
+}
+
+function History({ active, status, onUse, flash }) {
+  const [items, setItems] = useState(null);          // null = still loading
+  const [err, setErr] = useState('');
+  const [q, setQ] = useState('');
+  const [flt, setFlt] = useState('all');
+  const [openId, setOpenId] = useState('');
+  const [detail, setDetail] = useState({});          // id -> the full entry (with the log)
+  const [confirm, setConfirm] = useState('');        // an entry id, or '*' for "clear all"
+
+  async function load() {
+    try {
+      const r = await fetch('/history');
+      if (!r.ok) throw new Error(await r.text());
+      setItems(await r.json()); setErr('');
+    } catch (e) { setErr('Could not load the history: ' + e.message); setItems(i => i || []); }
+  }
+  useEffect(() => { if (active) load(); }, [active, status]);
+  useEffect(() => {                                   // while a run is going on, keep the list fresh
+    if (!active || status !== 'running') return;
+    const t = setInterval(load, 5000);
+    return () => clearInterval(t);
+  }, [active, status]);
+
+  async function toggle(id) {
+    const nid = openId === id ? '' : id;
+    setOpenId(nid);
+    if (nid && !detail[nid]) {
+      try { const r = await fetch('/history/' + nid); if (r.ok) { const j = await r.json(); setDetail(d => ({ ...d, [nid]: j })); } } catch (e) {}
+    }
+  }
+  async function del(id) {
+    setConfirm('');
+    const r = await fetch('/history/' + id, { method: 'DELETE' });
+    if (!r.ok) { flash(await r.text()); return; }
+    flash('Deleted'); if (openId === id) setOpenId('');
+    load();
+  }
+  async function clearAll() {
+    setConfirm('');
+    const r = await fetch('/history', { method: 'DELETE' });
+    if (!r.ok) { flash(await r.text()); return; }
+    const j = await r.json();
+    flash(j.removed + (j.removed === 1 ? ' entry removed' : ' entries removed')); setOpenId(''); setDetail({});
+    load();
+  }
+  async function openFolder(id) {
+    const r = await fetch('/history/' + id + '/open-folder', { method: 'POST' });
+    flash(r.ok ? 'Opened on the PC' : await r.text());
+  }
+
+  const total = items ? items.length : 0;
+  const s = q.trim().toLowerCase();
+  const list = (items || []).filter(h => {
+    if (flt === 'posted' && !h.posted) return false;
+    if (flt === 'video' && !h.hasVideo) return false;
+    if ((flt === 'done' || flt === 'error' || flt === 'stopped') && h.status !== flt) return false;
+    if (!s) return true;
+    return [h.name, h.productLink, h.prompt, h.caption, h.folder, h.error].join(' ').toLowerCase().includes(s);
+  });
+
+  return (
+    <>
+      <section className="card" aria-labelledby="hist-h">
+        <div className="row">
+          <h2 id="hist-h">History <span className="opt">({total} {total === 1 ? 'run' : 'runs'})</span></h2>
+          <button className="btn ghost small" onClick={load}>Refresh</button>
+        </div>
+        <p className="sub" style={{ marginTop: 4 }}>Every run is saved on the PC with its link, prompt, caption, settings and time. Open one to copy it, watch the video or use it again.</p>
+        <div className="filters">
+          <div>
+            <label className="sr-only" htmlFor="h-q">Search the history</label>
+            <input id="h-q" type="text" value={q} onChange={e => setQ(e.target.value)} placeholder="Search name, link, prompt or caption" autoComplete="off" />
+          </div>
+          <div>
+            <label className="sr-only" htmlFor="h-f">Show</label>
+            <select id="h-f" value={flt} onChange={e => setFlt(e.target.value)}>{HIST_FILTERS.map(o => <option key={o[0]} value={o[0]}>{o[1]}</option>)}</select>
+          </div>
+        </div>
+        <div className="h-actions">
+          <a className="btn ghost small" href="/history/export" download="affiliate-history.json">Export all</a>
+          <button className="btn ghost small" disabled={!total} onClick={() => setConfirm('*')}>Clear all</button>
+        </div>
+        {confirm === '*' && (
+          <div className="confirm" role="alertdialog" aria-label="Confirm clear all">
+            <p><b>Remove all {total} entries?</b> Only the list is cleared. The videos and folders on the PC stay. A run that is going on now is kept.</p>
+            <div className="h-actions">
+              <button className="btn danger small" onClick={clearAll}>Yes, clear all</button>
+              <button className="btn ghost small" onClick={() => setConfirm('')}>Cancel</button>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {err && <div className="alert" role="alert">{err}</div>}
+      <p className="sr-only" role="status">{items ? list.length + ' of ' + total + ' runs shown' : 'Loading'}</p>
+
+      {items && !total && !err && (
+        <section className="card empty" aria-label="No history yet">
+          <div className="big" aria-hidden="true">{'\u{1F552}'}</div>
+          <h2>No history yet</h2>
+          <p className="sub">Every run you start is saved here automatically.</p>
+        </section>
+      )}
+      {items && total > 0 && !list.length && (
+        <section className="card empty" aria-label="Nothing matches"><h2>No run matches</h2><p className="sub">Change the search or the filter above.</p></section>
+      )}
+
+      {list.map(h => {
+        const isReel = h.mode === 'reelpost';
+        const noVid = isReel || h.mode === 'autodmonly';     // no video was made in these runs
+        const p = h.params || {};
+        const title = isReel ? 'Reel from the phone\u2019s gallery' : cap1(h.name || h.productLink || 'Product');
+        const dur = h.endedAt ? mmss(h.endedAt - h.startedAt) : '';
+        const chips = [
+          MODE_LABEL[h.mode],
+          !noVid && p.videoType && cap1(p.videoType),
+          !noVid && p.reelFormat && p.reelFormat !== 'auto' && (p.reelFormat === 'custom' ? 'Own style' : p.reelFormat.replace(/_/g, ' ')),
+          !noVid && p.audio === 'voice' && 'Voice on',
+          !noVid && p.audio === 'none' && 'Voice off',
+          !noVid && p.cta && 'Spoken call to action',
+          !noVid && p.textOverlay && 'Text on video',
+          !noVid && p.showPrice && 'Price shown',
+          !noVid && p.textLang && p.textLang !== 'both' && cap1(p.textLang),
+          h.redo && 'Made again with a change',
+        ].filter(Boolean);
+        const open = openId === h.id;
+        const full = detail[h.id];
+        return (
+          <article className="card" key={h.id} aria-label={title}>
+            <div className="h-top">
+              <span className={'pill ' + h.status}>{h.status === 'running' ? <span className="spin" aria-hidden="true" /> : <span aria-hidden="true">{STATUS_ICON[h.status]}</span>} {STATUS_TEXT[h.status] || h.status}</span>
+              <span className="h-date">{dateText(h.startedAt)}{dur && ' \u00B7 ' + dur}</span>
+            </div>
+            <div className="h-title">{title}</div>
+            <div className="chips">
+              {chips.map(c => <span className="chip" key={c}>{c}</span>)}
+              {h.posted && <span className="chip good">Posted {'\u2713'}</span>}
+              {h.hasVideo && <span className="chip good">Video file {'\u2713'}</span>}
+            </div>
+            {h.error && h.status !== 'done' && <p className="hint" style={{ color: 'var(--bad-text)' }}>{h.error}</p>}
+            <div className="h-actions">
+              <button className="btn small" aria-expanded={open} onClick={() => toggle(h.id)}>{open ? 'Hide details' : 'Open details'}</button>
+              <button className="btn ghost small" onClick={() => onUse(h.params)} aria-label={'Use the settings of ' + title + ' again'}>Use again</button>
+              <button className="btn ghost small" onClick={() => setConfirm(confirm === h.id ? '' : h.id)} aria-label={'Delete ' + title}>Delete</button>
+            </div>
+            {confirm === h.id && (
+              <div className="confirm" role="alertdialog" aria-label="Confirm delete">
+                <p><b>Delete this entry?</b> The video and the files on the PC stay.</p>
+                <div className="h-actions">
+                  <button className="btn danger small" onClick={() => del(h.id)}>Yes, delete</button>
+                  <button className="btn ghost small" onClick={() => setConfirm('')}>Cancel</button>
+                </div>
+              </div>
+            )}
+            {open && (
+              <div className="h-body">
+                {h.productLink && (
+                  <div className="field"><span className="lbl">Product link</span>
+                    <a className="lnk" href={h.productLink} target="_blank" rel="noopener noreferrer">{h.productLink}</a></div>
+                )}
+                {h.feedback && <div className="field"><span className="lbl">Change you asked for</span><p>{h.feedback}</p></div>}
+                {h.prompt ? <HistCopy id={'hp-' + h.id} title="YouTube Create prompt" text={h.prompt} rows={6} flash={flash} /> : (!noVid && <p className="hint">No prompt was saved for this run (it stopped before the prompt was ready).</p>)}
+                {h.caption ? <HistCopy id={'hc-' + h.id} title="Instagram caption" text={h.caption} rows={8} flash={flash} /> : (!noVid && <p className="hint">No caption was saved for this run.</p>)}
+                {h.hasVideo && (
+                  <div className="field"><span className="lbl">Video</span>
+                    <video controls playsInline preload="metadata" src={'/history/' + h.id + '/video'} style={{ width: '100%', maxHeight: 460, borderRadius: 12, background: '#000' }} />
+                    <div className="h-actions"><a className="btn ghost small" href={'/history/' + h.id + '/video?download=1'}>Download the video</a></div>
+                  </div>
+                )}
+                {h.folder && (
+                  <div className="field"><span className="lbl">Folder on the PC {!h.folderExists && <span className="opt">(not found any more)</span>}</span>
+                    <div className="pathbox">{h.folder}</div>
+                    {h.folderExists && <div className="h-actions"><button className="btn ghost small" onClick={() => openFolder(h.id)}>Open the folder on the PC</button></div>}
+                  </div>
+                )}
+                <details className="more" style={{ marginTop: 14 }}>
+                  <summary>Log of this run</summary>
+                  <div className="body"><pre className="term" tabIndex={0} aria-label="Log of this run">{full ? ((full.logTail || []).join('\n') || 'No log was saved.') : 'Loading\u2026'}</pre></div>
+                </details>
+              </div>
+            )}
+          </article>
+        );
+      })}
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------- app ---- */
 function App() {
   const [f, setF] = useState({
-    pairLink: '', pairPin: '', connectLink: '', productLink: '',
-    videoType: 'hands', reelFormat: 'auto', customStyle: '', audio: 'auto', cta: false, textOverlay: false, overlayOpts: ['name', 'comment', 'dm'], overlayCustom: '', mode: 'video',
+    pairLink: '', pairPin: '', connectLink: '', productLink: '', caption: '',
+    videoType: 'hands', reelFormat: 'auto', customStyle: '', audio: 'auto', cta: false, showPrice: false, textLang: 'both', textOverlay: false, overlayOpts: ['name', 'comment', 'dm'], overlayCustom: '', mode: 'video',
     connectMode: /Android|iPhone|iPad|Mobi/i.test(navigator.userAgent) ? 'auto' : 'manual',
   });
+  const [view, setView] = useState('setup');          // setup | run
+  const [conn, setConn] = useState(true);             // live connection to the server
+  const [showErrors, setShowErrors] = useState(false);
+  const [toast, setToast] = useState('');
+  const [times, setTimes] = useState({ start: null, end: null });
   const [logs, setLogs] = useState([]);
   const [status, setStatus] = useState('idle');
   const [error, setError] = useState('');
@@ -55,15 +596,30 @@ function App() {
   const [alogs, setAlogs] = useState([]);
   const abox = useRef(null);
   const [styles, setStyles] = useState([]);
+  const [fbText, setFbText] = useState('');       // note for the bot
+  const [fbKind, setFbKind] = useState('video');  // video = change the video | phone = help on the phone screen
+  const [fbMsg, setFbMsg] = useState('');
+  const [phone, setPhone] = useState(null);      // {state: free|soon|busy, msg, until}: what the bot does with the phone
+  const [now, setNow] = useState(Date.now());
+  const prevStatus = useRef('idle');
+  const running = status === 'running';
+
+  useEffect(() => {                              // clock for the phone countdown and the run timer
+    if (!running && !(phone && phone.state === 'soon')) return;
+    const t = setInterval(() => setNow(Date.now()), phone && phone.state === 'soon' ? 500 : 1000);
+    return () => clearInterval(t);
+  }, [running, phone]);
 
   useEffect(() => { fetch('/styles').then(r => r.json()).then(setStyles).catch(() => {}); }, []);
 
   useEffect(() => {
     const es = new EventSource('/events');
+    es.onopen = () => setConn(true);
+    es.onerror = () => setConn(false);
     es.onmessage = e => {
       const d = JSON.parse(e.data);
-      if (d.reset) { setLogs([]); setPrompt(''); setCaption(''); }
-      if (d.params) setF(p => (p.pairLink || p.productLink ? p : { reelFormat: 'auto', customStyle: '', audio: 'auto', overlayOpts: ['name', 'comment', 'dm'], overlayCustom: '', ...d.params, mode: ({ prompt_only: 'prompt', yt_only: 'video', yt_instagram: 'post' })[d.params.mode] || d.params.mode, connectMode: p.connectMode }));   // another device already ran a job: show its inputs
+      if (d.reset) { setLogs([]); setPrompt(''); setCaption(''); setPhone(null); }
+      if (d.params) setF(p => (p.pairLink || p.productLink ? p : { reelFormat: 'auto', customStyle: '', audio: 'auto', showPrice: false, textLang: 'both', overlayCustom: '', ...d.params, overlayOpts: cleanOv(d.params.overlayOpts || ['name', 'comment', 'dm']), mode: ({ prompt_only: 'prompt', yt_only: 'video', yt_instagram: 'autodm' })[d.params.mode] || d.params.mode, connectMode: p.connectMode }));   // another device already ran a job: show its inputs
       if (typeof d.prompt === 'string') setPrompt(d.prompt);
       if (typeof d.caption === 'string') setCaption(d.caption);
       if (d.lines) setLogs(d.lines);
@@ -71,170 +627,412 @@ function App() {
       if (d.appium) setAlogs(l => [...l, d.appium].slice(-2000));
       if (d.line) setLogs(l => [...l, d.line]);
       if (d.status) setStatus(d.status);
+      if ('phone' in d) {
+        const ph = d.phone;
+        setNow(Date.now());                          // so the countdown starts at the exact value
+        setPhone(ph ? { ...ph, until: Date.now() + (ph.left || 0) * 1000 } : null);
+        if (ph && !d.lines && (ph.state === 'free' || ph.state === 'soon')) { try { navigator.vibrate && navigator.vibrate(ph.state === 'soon' ? [200, 100, 200] : 150); } catch (e) {} }
+      }
     };
     return () => es.close();
   }, []);
 
-  useEffect(() => { if (box.current) box.current.scrollTop = box.current.scrollHeight; }, [logs]);
+  useEffect(() => { if (box.current) box.current.scrollTop = box.current.scrollHeight; }, [logs, view]);
   useEffect(() => { if (abox.current) abox.current.scrollTop = abox.current.scrollHeight; }, [alogs]);
 
+  useEffect(() => {                              // a run started: show the Run tab. A run ended: stop the timer.
+    if (status === 'running' && prevStatus.current !== 'running') setView('run');
+    if (prevStatus.current === 'running' && status !== 'running') setTimes(t => (t.start && !t.end ? { ...t, end: Date.now() } : t));
+    prevStatus.current = status;
+  }, [status]);
+
+  useEffect(() => {                              // the tab title shows what is going on, handy when the page is in the background
+    const icon = { running: '\u23F3 ', done: '\u2705 ', error: '\u26A0\uFE0F ', stopped: '\u23F9 ' }[status] || '';
+    document.title = icon + 'Affiliate Bot';
+  }, [status]);
+
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
-  // texts that can be shown on the video (max 3, shown in this order: about the product first, call to action last)
-  const OVERLAY_GROUPS = [
-    { title: 'About the product', items: [['name', 'Product name (short)'], ['cute', 'Cute caption made from the product'], ['hook', 'Hook text (e.g. \u201cWait for it\u201d)'], ['feature', 'One real feature (from the product page)']] },
-    { title: 'Call to action', items: [['comment', 'Comment LINK'], ['dm', 'Link in your DM'], ['follow', 'Follow for more'], ['bio', 'Shop link in bio']] },
-    { title: 'Your own', items: [['custom', 'My own text']] },
-  ];
-  const OVERLAY_MAX = 3;
   const toggleOv = id => setF(p => {
     const has = p.overlayOpts.includes(id);
     if (!has && p.overlayOpts.length >= OVERLAY_MAX) return p;
-    return { ...p, overlayOpts: has ? p.overlayOpts.filter(x => x !== id) : [...p.overlayOpts, id] };
+    if (!has && OVERLAY_NEEDS[id] && !p.overlayOpts.includes(OVERLAY_NEEDS[id])) return p;
+    return { ...p, overlayOpts: cleanOv(has ? p.overlayOpts.filter(x => x !== id) : [...p.overlayOpts, id]) };   // unticking Comment LINK also removes Link in your DM
   });
+  const ovBox = ([id, text, needs]) => {          // one tick box of the text-on-video panel
+    const on = f.overlayOpts.includes(id);
+    const locked = !on && (f.overlayOpts.length >= OVERLAY_MAX || (needs && !f.overlayOpts.includes(needs)));
+    return (
+      <label key={id} className={'check' + (needs ? ' sub' : '') + (locked ? ' off' : '')}>
+        <input id={'ov-' + id} type="checkbox" checked={on} disabled={locked} onChange={() => toggleOv(id)} /><span>{text}{locked && needs && !f.overlayOpts.includes(needs) && <small>Tick Comment LINK first, this goes with it.</small>}</span>
+      </label>
+    );
+  };
   const trimmed = k => e => set(k, e.target.value.trim());
+  function pickLine(text) {                       // a ready-made line becomes "My own text" (the one custom text box)
+    if (!f.overlayOpts.includes('custom') && f.overlayOpts.length >= OVERLAY_MAX) { flash('Already ' + OVERLAY_MAX + ' texts chosen. Untick one first.'); return; }
+    setF(p => ({ ...p, textOverlay: true, overlayCustom: text, overlayOpts: p.overlayOpts.includes('custom') ? p.overlayOpts : [...p.overlayOpts, 'custom'] }));
+    flash('Text set: ' + text);
+  }
+  const flash = msg => { setToast(msg); setTimeout(() => setToast(''), 2200); };
+
+  const errs = validate(f);
+  const shown = showErrors ? errs : {};
 
   async function submit(restart) {
     setError('');
     const r = await fetch('/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...f, restart: !!restart }) });
-    if (!r.ok) setError(await r.text());
+    if (!r.ok) { setError(await r.text()); return; }
+    setTimes({ start: Date.now(), end: null });
+    setView('run');
+  }
+  function start(restart) {                      // checks the form first, shows the problem next to the field
+    const keys = Object.keys(errs);
+    if (keys.length) {
+      setShowErrors(true); setView('setup');
+      setTimeout(() => { const el = document.getElementById(FIELD_IDS[keys[0]]); if (el) { el.focus(); el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } }, 60);
+      return;
+    }
+    submit(restart);
+  }
+  async function sendNote() {                    // to the RUNNING bot
+    setFbMsg('');
+    const r = await fetch('/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: fbText, kind: noteKind }) });
+    if (r.ok) { setFbText(''); setFbMsg('Sent. The bot picks it up within a few seconds.'); } else setFbMsg(await r.text());
+  }
+  async function redoWithNote() {                // after a run: same screenshots + script, new video with the change
+    setError(''); setFbMsg('');
+    const r = await fetch('/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...f, restart: true, redo: true, feedback: fbText }) });
+    if (r.ok) { setFbText(''); setTimes({ start: Date.now(), end: null }); } else setFbMsg(await r.text());
+  }
+  function useAgain(p) {                         // History -> "Use again": load the settings of that run into Setup
+    const keep = {};
+    ['productLink', 'mode', 'videoType', 'reelFormat', 'customStyle', 'audio', 'cta', 'showPrice', 'textLang', 'textOverlay', 'overlayOpts', 'overlayCustom', 'caption'].forEach(k => { if (p && p[k] !== undefined) keep[k] = p[k]; });
+    setF(prev => ({ ...prev, ...keep }));
+    setShowErrors(false); setView('setup');
+    flash('Settings loaded. Check them, then press Start.');
+    setTimeout(() => window.scrollTo({ top: 0, behavior: 'smooth' }), 50);
   }
   async function clearLogs() { setLogs([]); try { await fetch('/clear', { method: 'POST' }); } catch (e) {} }
   async function clearAppium() { setAlogs([]); try { await fetch('/clear-appium', { method: 'POST' }); } catch (e) {} }
   async function stop() { setError(''); await fetch('/stop', { method: 'POST' }); }
 
-  function copyBox(ref, text, setFlag) {
+  function copyBox(ref, text, setFlag, what) {
     const t = ref.current; if (!t) return;
     t.focus(); t.select(); t.setSelectionRange(0, 99999);
     let ok = false;
     try { ok = document.execCommand('copy'); } catch (e) {}
     if (!ok && navigator.clipboard) navigator.clipboard.writeText(text).then(() => ok = true).catch(() => {});
-    setFlag(true); setTimeout(() => setFlag(false), 1500);
+    setFlag(true); setTimeout(() => setFlag(false), 1800);
+    flash(what + ' copied');
   }
-  const copyPrompt = () => copyBox(pbox, prompt, setCopied);
-  const copyCaption = () => copyBox(cbox, caption, setCopiedCap);
+  const copyPrompt = () => copyBox(pbox, prompt, setCopied, 'Prompt');
+  const copyCaption = () => copyBox(cbox, caption, setCopiedCap, 'Caption');
 
   // styles that fit the chosen video type (and the voice choice), straight from reel_styles.py
   const options = styles.filter(s => s.types.includes(f.videoType) && (f.audio === 'auto' || s.audible === (f.audio === 'voice')));
   const chosen = options.find(s => s.id === f.reelFormat);
   const noVoice = f.audio === 'none' || (chosen && !chosen.audible);
+  const reel = f.mode === 'reelpost';       // the Reel-only action: no product, no video
+  const dmOnly = f.mode === 'autodmonly';   // the auto-DM test: a product link, but no video and no post
+  const noVideo = reel || dmOnly;
+  // Notes can be typed in EVERY running state. While the bot posts the Reel / links the auto-DM (or in the Reel-only mode),
+  // there is no video to change, so only "help on the phone" notes make sense there.
+  const posting = running && logs.some(l => /Instagram Reel post ho raha hai|Creator Club auto-DM link ho raha hai/.test(l));
+  const phoneOnly = reel || dmOnly || posting;
+  const noteKind = phoneOnly ? 'phone' : fbKind;
+  const showNote = status !== 'idle' && (running || !noVideo);   // Reel-only / auto-DM-only mode has nothing to "make again", so only while running
+  const oddChars = reel ? Array.from(new Set(Array.from(f.caption).filter(c => c.codePointAt(0) > 127))).slice(0, 14).join(' ') : '';   // characters the phone typing may not manage
   useEffect(() => { if (f.reelFormat !== 'auto' && f.reelFormat !== 'custom' && !chosen) set('reelFormat', 'auto'); }, [f.videoType, f.audio, styles]);
   useEffect(() => { if (noVoice && f.cta) set('cta', false); }, [noVoice]);
+  useEffect(() => { if (!f.showPrice && f.overlayOpts.includes('price')) set('overlayOpts', f.overlayOpts.filter(x => x !== 'price')); }, [f.showPrice]);
 
-  const running = status === 'running';
+  const prog = parseProgress(logs);
+  const pct = status === 'done' ? 100 : (prog ? Math.round(((running ? prog.n - 0.5 : prog.n) / prog.t) * 100) : 0);
+  const lastLine = logs.length ? logs[logs.length - 1].trim().slice(0, 180) : '';
+  const left = phone && phone.state === 'soon' ? Math.max(0, Math.ceil((phone.until - now) / 1000)) : 0;
+  const leftSr = Math.ceil(left / 5) * 5;           // read out only every 5 seconds
+  const elapsed = times.start ? mmss((times.end || now) - times.start) : '';
+  const summary = {
+    idle: 'Nothing is running yet.',
+    running: prog ? 'Step ' + prog.n + ' of ' + prog.t + ': ' + prog.text.slice(0, 90) : 'Working on it\u2026',
+    done: 'All done. Your prompt and caption are below, and the video is in the output folder on the PC.',
+    error: 'Something went wrong. Read the last lines of the log, then use \u201CStart again\u201D or tell the bot what to change.',
+    stopped: 'You stopped the run.',
+  }[status];
+
   return (
-    <div className="wrap">
-      <h1>Affiliate Bot</h1>
-      <div className="card">
-        <label style={{marginTop:0}}>How to connect to the phone</label>
-        <label className="check"><input type="radio" name="cm" checked={f.connectMode === 'auto'} onChange={() => set('connectMode', 'auto')} /> Auto connect (open this page on the phone)</label>
-        <label className="check"><input type="radio" name="cm" checked={f.connectMode === 'manual'} onChange={() => set('connectMode', 'manual')} /> Manual (enter ADB details, e.g. from the PC)</label>
-        {f.connectMode === 'auto' ? (
-          <>
-            <div style={{fontSize:13,color:'var(--muted)',marginTop:10}}>Your phone is found automatically. Wireless debugging must be ON and the phone on the same WiFi as the PC.</div>
-            <label>ADB pair PIN — only needed the first time</label>
-            <input type="text" inputMode="numeric" value={f.pairPin} onChange={trimmed('pairPin')} placeholder="123456" />
-          </>
-        ) : (
-          <>
-            <label>ADB pair link (ip:port) — only for first-time pairing</label>
-            <input type="text" value={f.pairLink} onChange={trimmed('pairLink')} placeholder="192.168.1.5:37123" />
-            <label>ADB pair PIN — only for first-time pairing</label>
-            <input type="text" inputMode="numeric" value={f.pairPin} onChange={trimmed('pairPin')} placeholder="123456" />
-            <label>ADB connect link (ip:port)</label>
-            <input type="text" value={f.connectLink} onChange={trimmed('connectLink')} placeholder="192.168.1.5:41234" />
-          </>
-        )}
-        <label>Product link</label>
-        <input type="text" value={f.productLink} onChange={trimmed('productLink')} placeholder="https://..." />
-        <label>Video type</label>
-        <select value={f.videoType} onChange={e => set('videoType', e.target.value)}>
-          <option value="hands">Hands</option>
-          <option value="person">Person</option>
-          <option value="pet">Pet</option>
-          <option value="animated">Animated</option>
-        </select>
-        <label>Voice in the video</label>
-        <label className="check" style={{marginTop:4}}><input type="radio" name="au" checked={f.audio === 'auto'} onChange={() => set('audio', 'auto')} /> Auto (random)</label>
-        <label className="check" style={{marginTop:4}}><input type="radio" name="au" checked={f.audio === 'voice'} onChange={() => set('audio', 'voice')} /> Voice on: someone talks, narrates or sings</label>
-        <label className="check" style={{marginTop:4}}><input type="radio" name="au" checked={f.audio === 'none'} onChange={() => set('audio', 'none')} /> Voice off: only music or natural sounds</label>
-        <label>Video style</label>
-        <select value={f.reelFormat} onChange={e => set('reelFormat', e.target.value)}>
-          <option value="auto">Auto (a different style every time)</option>
-          <option value="custom">{'\u270D '}Write my own style…</option>
-          {options.map(s => <option key={s.id} value={s.id}>{(s.audible ? '\u{1F5E3} ' : '\u{1F507} ') + s.label}</option>)}
-        </select>
-        {f.reelFormat === 'custom' && (
-          <>
-            <label>Describe your style (the AI follows this first)</label>
-            <textarea value={f.customStyle} maxLength={300} onChange={e => set('customStyle', e.target.value)}
-              placeholder="e.g. cosy bedroom reel, college girl shows it as a cute desk gadget, fun and quick"
-              style={{width:'100%',height:80,padding:10,fontSize:16,border:'1px solid var(--border)',borderRadius:8,background:'var(--bg)',color:'var(--text)',fontFamily:'inherit'}} />
-            <div style={{fontSize:12,color:'var(--muted)',marginTop:4}}>{f.customStyle.length}/300. Voice and video type above still apply.</div>
-          </>
-        )}
-        <label className="check" style={noVoice ? {opacity:.5} : null}><input type="checkbox" checked={f.cta && !noVoice} disabled={noVoice} onChange={e => set('cta', e.target.checked)} /> CTA to be said in video{noVoice ? ' (needs a voice)' : ''}</label>
-        <label className="check"><input type="checkbox" checked={f.textOverlay} onChange={e => set('textOverlay', e.target.checked)} /> Text on video (e.g. “Cute toy”, comment, DM)</label>
-        {f.textOverlay && (
-          <div style={{marginTop:8,padding:'4px 12px 12px',border:'1px solid var(--border)',borderRadius:8}}>
-            <div style={{fontSize:13,color:'var(--muted)',marginTop:8}}>Pick up to {OVERLAY_MAX} ({f.overlayOpts.length}/{OVERLAY_MAX}). They appear in this order: about the product, then your own text, then call to action.</div>
-            {OVERLAY_GROUPS.map(g => (
-              <div key={g.title}>
-                <label style={{marginTop:10}}>{g.title}</label>
-                {g.items.map(([id, text]) => {
-                  const on = f.overlayOpts.includes(id);
-                  const locked = !on && f.overlayOpts.length >= OVERLAY_MAX;
-                  return (
-                    <label key={id} className="check" style={{marginTop:6, opacity: locked ? .5 : 1}}>
-                      <input type="checkbox" checked={on} disabled={locked} onChange={() => toggleOv(id)} /> {text}
-                    </label>
-                  );
-                })}
-              </div>
-            ))}
-            {f.overlayOpts.includes('custom') && (
-              <>
-                <label>Your own text (spelled exactly as typed)</label>
-                <input type="text" maxLength={40} value={f.overlayCustom} onChange={e => set('overlayCustom', e.target.value)} placeholder="e.g. Desk buddy" />
-                <div style={{fontSize:12,color:'var(--muted)',marginTop:4}}>{f.overlayCustom.length}/40</div>
-              </>
-            )}
+    <>
+      <header className="top">
+        <div className="in">
+          <div className="brand"><span className="logo" aria-hidden="true">{'\u25B6'}</span><h1>Affiliate Bot</h1></div>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+            <span className={'pill ' + status}>{running ? <span className="spin" aria-hidden="true" /> : <span aria-hidden="true">{STATUS_ICON[status]}</span>} {STATUS_TEXT[status]}</span>
+            <span className="live" role="status"><span className={'dot' + (conn ? '' : ' off')} aria-hidden="true" />{conn ? 'Connected' : 'Reconnecting\u2026'}</span>
+          </div>
+        </div>
+        <div className="tabs" role="tablist" aria-label="Pages"
+          onKeyDown={e => { if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { const order = ['setup', 'run', 'history']; const nv = order[(order.indexOf(view) + (e.key === 'ArrowRight' ? 1 : 2)) % 3]; setView(nv); setTimeout(() => { const t = document.getElementById('tab-' + nv); if (t) t.focus(); }, 0); } }}>
+          <button role="tab" id="tab-setup" className="tab" aria-selected={view === 'setup'} aria-controls="panel-setup" tabIndex={view === 'setup' ? 0 : -1} onClick={() => setView('setup')}>
+            <span aria-hidden="true">{'\u2699'}</span> Setup</button>
+          <button role="tab" id="tab-run" className="tab" aria-selected={view === 'run'} aria-controls="panel-run" tabIndex={view === 'run' ? 0 : -1} onClick={() => setView('run')}>
+            <span aria-hidden="true">{'\u25B6'}</span> Run and results {running && <span className="spin" aria-hidden="true" />}</button>
+          <button role="tab" id="tab-history" className="tab" aria-selected={view === 'history'} aria-controls="panel-history" tabIndex={view === 'history' ? 0 : -1} onClick={() => setView('history')}>
+            <span aria-hidden="true">{'\u{1F552}'}</span> History</button>
+        </div>
+      </header>
+
+      <main id="main" tabIndex={-1}>
+        {running && phone && phone.state === 'free' && (
+          <div className="phone free" role="status">
+            <span className="ic" aria-hidden="true">{'\u2705'}</span>
+            <div><b>You can use your phone now</b><span className="t">{phone.msg} The bot needs the phone again for the next phone step. A countdown appears here first, so you have time to finish.</span></div>
           </div>
         )}
-        <label>Action</label>
-        <select value={f.mode} onChange={e => set('mode', e.target.value)}>
-          <option value="prompt">1. Prompt for YT Create + Instagram caption</option>
-          <option value="video">2. Video creation (prompt + caption + video)</option>
-          <option value="post">3. Instagram Reel posting (prompt + caption + video + post)</option>
-        </select>
-        <div style={{fontSize:12,color:'var(--muted)',marginTop:4}}>The prompt and the caption appear below as soon as they are ready, before the video is made. If a later step gets stuck, copy them and carry on by hand.</div>
-        {error && <div className="err">{error}</div>}
-        <div className="btns">
-          {!running && <button onClick={() => submit(false)}>Submit</button>}
-          {running && <button className="stop" onClick={stop}>■ Stop</button>}
-          {status !== 'idle' && <button className="again" onClick={() => submit(true)}>↻ Start again</button>}
+        {running && phone && phone.state === 'soon' && (
+          <div className="phone soon" role="status">
+            <span className="ic" aria-hidden="true">{'\u23F3'}</span>
+            <div>
+              <b>The bot needs the phone in <span className="bignum" aria-hidden="true">{left}</span><span className="sr-only">about {leftSr}</span> seconds</b>
+              <span className="t">Finish what you are doing. After the countdown, leave the phone alone until this box turns green again.</span>
+            </div>
+          </div>
+        )}
+        {running && phone && phone.state === 'busy' && (
+          <div className="phone busy" role="status">
+            <span className="ic" aria-hidden="true">{'\u{1F916}'}</span>
+            <div><b>The bot is using the phone</b><span className="t">{phone.msg} Please do not touch it. This box turns green when the phone is free again.</span></div>
+          </div>
+        )}
+        {error && <div className="alert" role="alert"><strong>Could not start: </strong>{error}</div>}
+
+        {/* ============================ SETUP ============================ */}
+        <div role="tabpanel" id="panel-setup" aria-labelledby="tab-setup" hidden={view !== 'setup'}>
+          {running && (
+            <div className="alert info" role="status"><span>A run is in progress. Changes here apply to the next run.</span>
+              <button className="btn ghost small" onClick={() => setView('run')}>Open Run and results</button></div>
+          )}
+
+          <Section n="1" title="What should the bot do?" sub="The first four each include the ones above them. \u201COnly the auto-DM\u201D and \u201COnly post a Reel\u201D are separate.">
+            <Choices name="mode" legend="Action" value={f.mode} onChange={v => set('mode', v)} options={ACTIONS} one />
+            {!noVideo && <p className="hint">The prompt and the caption appear as soon as they are ready, before the video is made. If a later step gets stuck, copy them and carry on by hand.</p>}
+            {dmOnly && <p className="hint">For testing: the bot connects to the phone, closes Meesho, opens the product link and wishlists it again, then opens Profile \u2192 Meesho Creator Club \u2192 Send Products to DM and links the auto-DM to your most recent Instagram post. Post the Reel yourself first, so it is the most recent one.</p>}
+            {reel && <p className="hint">The bot connects to the phone, opens Instagram, starts a new Reel with the newest video in the gallery, types your caption and shares it. Check on the phone that the newest video is the one you want before you press Start.</p>}
+          </Section>
+
+          <Section n="2" title={reel ? 'Caption and phone' : 'Product and phone'} sub={reel ? 'The phone posts the newest gallery video as a Reel with this caption.' : dmOnly ? 'The phone wishlists this product and links the auto-DM to it.' : (f.mode === 'prompt' ? 'The product page is read in a browser on the PC. The phone is not needed.' : 'The bot reads the product on your phone and makes the video there.')}>
+            {reel ? (
+              <Field id="f-caption" label="Caption" error={shown.caption} hint={'Typed into Instagram exactly as written, including line breaks and hashtags. ' + (oddChars ? 'The phone typing may skip or garble these characters: ' + oddChars + ' (emojis and Hindi letters are the usual problem).' : 'Plain letters, numbers and common symbols are typed reliably.')}>
+                <textarea id="f-caption" rows={7} value={f.caption} maxLength={2200} onChange={e => set('caption', e.target.value)}
+                  placeholder={'Write the caption here.\n\n#hashtag #another'}
+                  aria-invalid={!!shown.caption} aria-describedby={'f-caption-hint' + (shown.caption ? ' f-caption-err' : '')} />
+                <div className="counter" aria-hidden="true">{f.caption.length}/2200</div>
+              </Field>
+            ) : (
+            <Field id="f-product" label="Product link" error={shown.productLink} hint="Paste the link of the Meesho product.">
+              <input id="f-product" type="text" inputMode="url" autoComplete="off" autoCapitalize="off" spellCheck="false" value={f.productLink} onChange={trimmed('productLink')} placeholder="https://www.meesho.com/..."
+                aria-invalid={!!shown.productLink} aria-describedby={'f-product-hint' + (shown.productLink ? ' f-product-err' : '')} />
+            </Field>
+            )}
+            {f.mode !== 'prompt' && (
+              <>
+                <Choices name="cm" legend="How should the bot connect to the phone?" value={f.connectMode} onChange={v => set('connectMode', v)} options={CONNECT} />
+                {f.connectMode === 'auto' ? (
+                  <>
+                    <p className="hint">Your phone is found automatically. Wireless debugging must be on, and the phone must be on the same Wi-Fi as the PC.</p>
+                    <Field id="f-pin" label="ADB pair PIN" optional hint="Only needed the first time you connect." error={shown.pairPin}>
+                      <input id="f-pin" type="text" inputMode="numeric" autoComplete="off" value={f.pairPin} onChange={trimmed('pairPin')} placeholder="123456"
+                        aria-invalid={!!shown.pairPin} aria-describedby={'f-pin-hint' + (shown.pairPin ? ' f-pin-err' : '')} />
+                    </Field>
+                  </>
+                ) : (
+                  <>
+                    <Field id="f-connect" label="ADB connect link" hint="The address shown under Wireless debugging, as ip:port." error={shown.connectLink}>
+                      <input id="f-connect" type="text" inputMode="decimal" autoComplete="off" autoCapitalize="off" spellCheck="false" value={f.connectLink} onChange={trimmed('connectLink')} placeholder="192.168.1.5:41234"
+                        aria-invalid={!!shown.connectLink} aria-describedby={'f-connect-hint' + (shown.connectLink ? ' f-connect-err' : '')} />
+                    </Field>
+                    <details className="more" open={!!(f.pairLink || f.pairPin)}>
+                      <summary>First-time pairing</summary>
+                      <div className="body">
+                        <Field id="f-pairlink" label="ADB pair link" optional hint="Shown when you tap Pair device with pairing code." error={shown.pairLink}>
+                          <input id="f-pairlink" type="text" inputMode="decimal" autoComplete="off" autoCapitalize="off" spellCheck="false" value={f.pairLink} onChange={trimmed('pairLink')} placeholder="192.168.1.5:37123"
+                            aria-invalid={!!shown.pairLink} aria-describedby={'f-pairlink-hint' + (shown.pairLink ? ' f-pairlink-err' : '')} />
+                        </Field>
+                        <Field id="f-pin" label="ADB pair PIN" optional error={shown.pairPin}>
+                          <input id="f-pin" type="text" inputMode="numeric" autoComplete="off" value={f.pairPin} onChange={trimmed('pairPin')} placeholder="123456"
+                            aria-invalid={!!shown.pairPin} aria-describedby={shown.pairPin ? 'f-pin-err' : undefined} />
+                        </Field>
+                      </div>
+                    </details>
+                  </>
+                )}
+              </>
+            )}
+          </Section>
+
+          {!noVideo && (
+          <Section n="3" title="How should the video look?" sub="Leave things on Auto to get a different video every time.">
+            <Choices name="vt" legend="Video type" value={f.videoType} onChange={v => set('videoType', v)} options={VIDEO_TYPES} />
+            <Choices name="au" legend="Voice in the video" value={f.audio} onChange={v => set('audio', v)} options={VOICES} />
+            <div className="field">
+              <label className="lbl" htmlFor="f-style">Video style</label>
+              <select id="f-style" value={f.reelFormat} onChange={e => set('reelFormat', e.target.value)} aria-describedby="f-style-hint">
+                <option value="auto">Auto (a different style every time)</option>
+                <option value="custom">{'\u270D '}Write my own style{'\u2026'}</option>
+                {[...new Set(options.map(s => s.group || 'Other'))].map(g => (
+                  <optgroup key={g} label={g}>
+                    {options.filter(s => (s.group || 'Other') === g).map(s => <option key={s.id} value={s.id}>{(s.audible ? '\u{1F5E3} ' : '\u{1F507} ') + s.label}</option>)}
+                  </optgroup>
+                ))}
+              </select>
+              <div className="hint" id="f-style-hint">The list changes with the video type and the voice choice and is split into groups ({options.length} styles now). {'\u{1F5E3}'} = has a voice, {'\u{1F507}'} = no voice.</div>
+            </div>
+            {f.reelFormat === 'custom' && (
+              <Field id="f-custom" label="Describe your style" hint="The AI follows this first. The video type and voice choice above still apply." error={shown.customStyle}>
+                <textarea id="f-custom" rows={3} value={f.customStyle} maxLength={300} onChange={e => set('customStyle', e.target.value)}
+                  placeholder="e.g. cosy bedroom reel, college girl shows it as a cute desk gadget, fun and quick"
+                  aria-invalid={!!shown.customStyle} aria-describedby={'f-custom-hint' + (shown.customStyle ? ' f-custom-err' : '')} />
+                <div className="counter" aria-hidden="true">{f.customStyle.length}/300</div>
+              </Field>
+            )}
+
+            <details className="more">
+              <summary>More options (price, call to action, text on the video)</summary>
+              <div className="body">
+                <label className="check">
+                  <input type="checkbox" checked={f.showPrice} onChange={e => set('showPrice', e.target.checked)} />
+                  <span>Mention the price<small>Off: the video, the text and the caption never mention a price. On: the price from the product page may be used once.</small></span>
+                </label>
+                <label className={'check' + (noVoice ? ' off' : '')}>
+                  <input type="checkbox" checked={f.cta && !noVoice} disabled={noVoice} onChange={e => set('cta', e.target.checked)} />
+                  <span>Say the call to action in the video{noVoice && <small>Needs a voice. Choose Voice on or Auto.</small>}</span>
+                </label>
+                <label className="check">
+                  <input type="checkbox" checked={f.textOverlay} onChange={e => set('textOverlay', e.target.checked)} />
+                  <span>Show text on the video<small>Pick the words that appear on the video: about the product, your own text or a ready-made viral line, and a call to action.</small></span>
+                </label>
+                {f.textOverlay && (
+                  <fieldset className="panel" aria-describedby="ov-count">
+                    <legend className="sr-only">Texts shown on the video</legend>
+                    <p className="hint" id="ov-count" role="status">Pick up to {OVERLAY_MAX}. Chosen: {f.overlayOpts.length} of {OVERLAY_MAX}. They appear in this order: about the product, then your own text or viral line, then the call to action.</p>
+                    <div role="group" aria-label={OVERLAY_GROUPS[0].title}>
+                      <div className="grp">{OVERLAY_GROUPS[0].title}</div>
+                      {(f.showPrice ? [...OVERLAY_GROUPS[0].items, PRICE_ITEM] : OVERLAY_GROUPS[0].items).map(ovBox)}
+                    </div>
+                    <div role="group" aria-label="Your own text or a viral line">
+                      <div className="grp">Your own text or a viral line</div>
+                      {ovBox(['custom', 'Show my own text or a viral line'])}
+                      {f.overlayOpts.includes('custom') && (
+                        <Field id="f-ovcustom" label="Text on the video" hint="It is shown exactly as you type it. Type your own, or tap a viral line below." error={shown.overlayCustom}>
+                          <input id="f-ovcustom" type="text" maxLength={40} value={f.overlayCustom} onChange={e => set('overlayCustom', e.target.value)} placeholder="e.g. Desk buddy"
+                            aria-invalid={!!shown.overlayCustom} aria-describedby={'f-ovcustom-hint' + (shown.overlayCustom ? ' f-ovcustom-err' : '')} />
+                          <div className="counter" aria-hidden="true">{f.overlayCustom.length}/40</div>
+                        </Field>
+                      )}
+                      <Choices name="tl" legend="Viral lines: language" value={f.textLang} onChange={v => set('textLang', v)} options={TEXT_LANGS}
+                        hint="Tap a line to use it as the text on the video. The language also steers the viral line ideas the AI gets for the spoken lines and the caption." />
+                      <TextLibrary lang={f.textLang} showPrice={f.showPrice} current={f.overlayOpts.includes('custom') ? f.overlayCustom : ''} onPick={pickLine} />
+                    </div>
+                    <div role="group" aria-label={OVERLAY_GROUPS[1].title}>
+                      <div className="grp">{OVERLAY_GROUPS[1].title}</div>
+                      {OVERLAY_GROUPS[1].items.map(ovBox)}
+                    </div>
+                    {shown.overlay && <div className="err-text" role="alert"><span aria-hidden="true">{'\u26A0'}</span><span>{shown.overlay}</span></div>}
+                  </fieldset>
+                )}
+              </div>
+            </details>
+          </Section>
+          )}
+        </div>
+
+        {/* ============================ RUN ============================ */}
+        <div role="tabpanel" id="panel-run" aria-labelledby="tab-run" hidden={view !== 'run'}>
+          {status === 'idle' ? (
+            <section className="card empty" aria-label="Nothing running">
+              <div className="big" aria-hidden="true">{'\u{1F680}'}</div>
+              <h2>Nothing is running yet</h2>
+              <p className="sub">Fill in the setup and press Start. Progress, the prompt, the caption and the logs show up here.</p>
+              <button className="btn block" onClick={() => setView('setup')}>Go to Setup</button>
+            </section>
+          ) : (
+            <section className="card" aria-labelledby="prog-h">
+              <div className="row"><h2 id="prog-h">Progress</h2><span className={'pill ' + status}>{running ? <span className="spin" aria-hidden="true" /> : <span aria-hidden="true">{STATUS_ICON[status]}</span>} {STATUS_TEXT[status]}</span></div>
+              <p className="sub" style={{ marginTop: 8 }} role="status">{summary}</p>
+              <div className={'progress' + (status === 'done' ? ' ok' : status === 'error' ? ' bad' : (running && !prog ? ' indet' : ''))}
+                role="progressbar" aria-label="Run progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={prog || status === 'done' ? pct : undefined}
+                aria-valuetext={prog ? 'Step ' + prog.n + ' of ' + prog.t : (running ? 'Working' : STATUS_TEXT[status])}><div style={{ width: pct + '%' }} /></div>
+              <div className="meta"><span>{prog ? 'Step ' + prog.n + ' of ' + prog.t : ''}</span><span>{elapsed && 'Time: ' + elapsed}</span></div>
+              {lastLine && <div className="now" aria-hidden="true"><span className="opt">Latest: </span>{lastLine}</div>}
+            </section>
+          )}
+
+          {showNote && (
+            <section className="card" aria-labelledby="fix-h">
+              <h2 id="fix-h">Fix or guide the bot</h2>
+              <p className="sub" style={{ marginTop: 4 }}>
+                {running
+                  ? (noteKind === 'phone'
+                      ? 'Stuck on a screen? Tell the bot what to do. A helper follows it on the phone (it can never publish, share, buy or press Generate).'
+                      : 'The bot stops waiting for the current video, changes the YouTube prompt the way you wrote, and makes the video again. The spoken words are not changed.')
+                  : 'Reuses the product screenshots and the script of the last run (nothing is opened or written again), changes the YouTube prompt the way you wrote, and makes the video again.'}
+              </p>
+              {running && !phoneOnly && (
+                <Choices name="fbk" legend="What kind of note is this?" value={fbKind} onChange={setFbKind}
+                  options={[{ value: 'video', label: 'Change the video', sub: 'The prompt is rewritten' }, { value: 'phone', label: 'Help on the phone screen', sub: 'The bot is stuck' }]} />
+              )}
+              <Field id="fb-text" label={running ? 'Your note' : 'What should change?'}>
+                <textarea id="fb-text" rows={3} value={fbText} onChange={e => setFbText(e.target.value)} maxLength={500}
+                  placeholder={running && noteKind === 'phone' ? 'e.g. tap Allow on the popup / close the rating dialog' : 'e.g. show the toy on a wooden table, slow close-ups / no hands in the video / make the colours brighter'} />
+                <div className="counter" aria-hidden="true">{fbText.length}/500</div>
+              </Field>
+              {running
+                ? <button className="btn block" onClick={sendNote} disabled={fbText.trim().length < 3}>Send to the running bot</button>
+                : <button className="btn success block" onClick={redoWithNote} disabled={fbText.trim().length < 3}>{'\u21BB'} Make again with this change</button>}
+              {fbMsg && <p className="hint" role="status">{fbMsg}</p>}
+            </section>
+          )}
+
+          {prompt && <CopyCard id="prompt-h" title="YouTube Create prompt" count={prompt.length} text={prompt} boxRef={pbox} onCopy={copyPrompt} copied={copied} rows={7} />}
+          {caption && <CopyCard id="caption-h" title="Instagram caption" count={caption.length} text={caption} boxRef={cbox} onCopy={copyCaption} copied={copiedCap} rows={9} />}
+
+          <details className="card more" style={{ padding: '0 18px' }} open={status === 'error'}>
+            <summary>Detailed log {logs.length > 0 && <span className="opt">({logs.length} lines)</span>}</summary>
+            <div className="body">
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>{logs.length > 0 && <button className="btn ghost small" onClick={clearLogs}>Clear log</button>}</div>
+              <pre className="term" ref={box} tabIndex={0} role="log" aria-label="Detailed log of the bot">{logs.length ? logs.join('\n') : 'Logs will appear here\u2026'}</pre>
+            </div>
+          </details>
+          <details className="card more" style={{ padding: '0 18px' }}>
+            <summary>Appium log (for troubleshooting)</summary>
+            <div className="body">
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>{alogs.length > 0 && <button className="btn ghost small" onClick={clearAppium}>Clear log</button>}</div>
+              <pre className="term blue" ref={abox} tabIndex={0} role="log" aria-label="Appium log">{alogs.length ? alogs.join('\n') : 'Appium output will appear here\u2026'}</pre>
+            </div>
+          </details>
+        </div>
+        {/* ============================ HISTORY ============================ */}
+        <div role="tabpanel" id="panel-history" aria-labelledby="tab-history" hidden={view !== 'history'}>
+          <History active={view === 'history'} status={status} onUse={useAgain} flash={flash} />
+        </div>
+      </main>
+
+      <div className="toast" role="status" aria-live="polite">{toast}</div>
+
+      <div className="bar" role="region" aria-label="Actions">
+        <div className="in">
+          {running ? (
+            <>
+              <button className="btn danger" onClick={stop}><span aria-hidden="true">{'\u25A0'}</span> Stop</button>
+              <button className="btn ghost" onClick={() => start(true)}><span aria-hidden="true">{'\u21BB'}</span> Start again</button>
+            </>
+          ) : status !== 'idle' ? (
+            <button className="btn" onClick={() => start(true)}><span aria-hidden="true">{'\u21BB'}</span> Start again</button>
+          ) : (
+            <button className="btn" onClick={() => start(false)}><span aria-hidden="true">{'\u25B6'}</span> Start</button>
+          )}
         </div>
       </div>
-      {prompt && (
-        <div className="card">
-          <div className="row"><strong>YT Create prompt ({prompt.length} chars)</strong><span style={{cursor:'pointer',color:'var(--accent)'}} onClick={copyPrompt}>{copied ? 'Copied ✓' : 'Copy'}</span></div>
-          <textarea ref={pbox} readOnly value={prompt} style={{width:'100%',height:150,marginTop:10,padding:10,fontSize:14,border:'1px solid var(--border)',borderRadius:8,background:'var(--bg)',color:'var(--text)'}} />
-        </div>
-      )}
-      {caption && (
-        <div className="card">
-          <div className="row"><strong>Instagram caption ({caption.length} chars)</strong><span style={{cursor:'pointer',color:'var(--accent)'}} onClick={copyCaption}>{copiedCap ? 'Copied ✓' : 'Copy'}</span></div>
-          <textarea ref={cbox} readOnly value={caption} style={{width:'100%',height:190,marginTop:10,padding:10,fontSize:14,border:'1px solid var(--border)',borderRadius:8,background:'var(--bg)',color:'var(--text)'}} />
-        </div>
-      )}
-      <div className="card">
-        <div className="row"><strong>Output logs</strong><span style={{display:'flex',gap:10,alignItems:'center'}}>{logs.length > 0 && <span style={{cursor:'pointer',color:'var(--accent)',fontSize:14}} onClick={clearLogs}>Clear log</span>}<span className={'badge ' + status}>{status}</span></span></div>
-        <pre ref={box}>{logs.length ? logs.join('\n') : 'Logs will appear here…'}</pre>
-      </div>
-      <div className="card">
-        <div className="row"><strong>Appium log</strong>{alogs.length > 0 && <span style={{cursor:'pointer',color:'var(--accent)',fontSize:14}} onClick={clearAppium}>Clear log</span>}</div>
-        <pre ref={abox} style={{height:240,color:'#9ecbff'}}>{alogs.length ? alogs.join('\n') : 'Appium output will appear here…'}</pre>
-      </div>
-    </div>
+    </>
   );
 }
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
