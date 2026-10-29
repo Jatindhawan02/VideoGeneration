@@ -521,6 +521,7 @@ function History({ active, status, onUse, flash }) {
               {chips.map(c => <span className="chip" key={c}>{c}</span>)}
               {h.posted && <span className="chip good">Posted {'\u2713'}</span>}
               {h.hasVideo && <span className="chip good">Video file {'\u2713'}</span>}
+              {h.hasCover && <span className="chip good">Cover {'\u2713'}</span>}
             </div>
             {h.error && h.status !== 'done' && <p className="hint" style={{ color: 'var(--bad-text)' }}>{h.error}</p>}
             <div className="h-actions">
@@ -546,6 +547,13 @@ function History({ active, status, onUse, flash }) {
                 {h.feedback && <div className="field"><span className="lbl">Change you asked for</span><p>{h.feedback}</p></div>}
                 {h.prompt ? <HistCopy id={'hp-' + h.id} title="YouTube Create prompt" text={h.prompt} rows={6} flash={flash} /> : (!noVid && <p className="hint">No prompt was saved for this run (it stopped before the prompt was ready).</p>)}
                 {h.caption ? <HistCopy id={'hc-' + h.id} title="Instagram caption" text={h.caption} rows={8} flash={flash} /> : (!noVid && <p className="hint">No caption was saved for this run.</p>)}
+                {h.hasCover && (
+                  <div className="field"><span className="lbl">Reel cover{h.coverUploaded && <span className="opt"> (uploaded by you)</span>}</span>
+                    <img src={'/history/' + h.id + '/cover'} alt="The cover made for this Reel" style={{ width: 200, maxWidth: '100%', borderRadius: 12, display: 'block' }} />
+                    <div className="h-actions"><a className="btn ghost small" href={'/history/' + h.id + '/cover?download=1'}>Download the cover</a></div>
+                  </div>
+                )}
+                {h.coverPrompt ? <HistCopy id={'hcp-' + h.id} title="Cover prompt and words" text={h.coverPrompt} rows={8} flash={flash} /> : null}
                 {h.hasVideo && (
                   <div className="field"><span className="lbl">Video</span>
                     <video controls playsInline preload="metadata" src={'/history/' + h.id + '/video'} style={{ width: '100%', maxHeight: 460, borderRadius: 12, background: '#000' }} />
@@ -597,6 +605,8 @@ function App() {
   const abox = useRef(null);
   const [styles, setStyles] = useState([]);
   const [fbText, setFbText] = useState('');       // note for the bot
+  const [cover, setCover] = useState(null);       // picture uploaded as the Reel cover (kept on the server until removed)
+  const [coverMsg, setCoverMsg] = useState('');
   const [fbKind, setFbKind] = useState('video');  // video = change the video | phone = help on the phone screen
   const [fbMsg, setFbMsg] = useState('');
   const [phone, setPhone] = useState(null);      // {state: free|soon|busy, msg, until}: what the bot does with the phone
@@ -668,6 +678,20 @@ function App() {
     );
   };
   const trimmed = k => e => set(k, e.target.value.trim());
+  useEffect(() => { fetch('/cover-upload').then(r => r.json()).then(j => { if (j && j.exists) setCover({ name: j.name || 'cover', url: '/cover-upload/file?t=' + Date.now() }); }).catch(() => {}); }, []);
+  async function pickCover(e) {
+    const file = e.target.files && e.target.files[0]; e.target.value = '';
+    if (!file) return;
+    setCoverMsg('');
+    if (!/^image\/(png|jpeg|webp)$/.test(file.type)) { setCoverMsg('Use a PNG, JPG or WebP picture.'); return; }
+    if (file.size > 8 * 1024 * 1024) { setCoverMsg('This picture is bigger than 8 MB.'); return; }
+    try {
+      const r = await fetch('/cover-upload?name=' + encodeURIComponent(file.name), { method: 'POST', headers: { 'Content-Type': file.type }, body: file });
+      if (!r.ok) throw new Error(await r.text());
+      setCover({ name: file.name, url: '/cover-upload/file?t=' + Date.now() });
+    } catch (err) { setCoverMsg('The picture could not be uploaded: ' + String((err && err.message) || err).slice(0, 120)); }
+  }
+  async function removeCover() { try { await fetch('/cover-upload', { method: 'DELETE' }); } catch (e) {} setCover(null); setCoverMsg(''); }
   function pickLine(text) {                       // a ready-made line becomes "My own text" (the one custom text box)
     if (!f.overlayOpts.includes('custom') && f.overlayOpts.length >= OVERLAY_MAX) { flash('Already ' + OVERLAY_MAX + ' texts chosen. Untick one first.'); return; }
     setF(p => ({ ...p, textOverlay: true, overlayCustom: text, overlayOpts: p.overlayOpts.includes('custom') ? p.overlayOpts : [...p.overlayOpts, 'custom'] }));
@@ -821,12 +845,24 @@ function App() {
 
           <Section n="2" title={reel ? 'Caption and phone' : 'Product and phone'} sub={reel ? 'The phone posts the newest gallery video as a Reel with this caption.' : dmOnly ? 'The phone wishlists this product and links the auto-DM to it.' : (f.mode === 'prompt' ? 'The product page is read in a browser on the PC. The phone is not needed.' : 'The bot reads the product on your phone and makes the video there.')}>
             {reel ? (
+              <>
               <Field id="f-caption" label="Caption" error={shown.caption} hint={'Typed into Instagram exactly as written, including line breaks and hashtags. ' + (oddChars ? 'The phone typing may skip or garble these characters: ' + oddChars + ' (emojis and Hindi letters are the usual problem).' : 'Plain letters, numbers and common symbols are typed reliably.')}>
                 <textarea id="f-caption" rows={7} value={f.caption} maxLength={2200} onChange={e => set('caption', e.target.value)}
                   placeholder={'Write the caption here.\n\n#hashtag #another'}
                   aria-invalid={!!shown.caption} aria-describedby={'f-caption-hint' + (shown.caption ? ' f-caption-err' : '')} />
                 <div className="counter" aria-hidden="true">{f.caption.length}/2200</div>
               </Field>
+              <Field id="f-cover" label="Cover picture" optional hint={'Optional. Becomes the Reel cover on Instagram. A picture that is not 9:16 is centred on a blurred copy of itself. Without one, Instagram\u2019s own cover is used (never a black one).'}>
+                <input id="f-cover" type="file" accept="image/png,image/jpeg,image/webp" onChange={pickCover} aria-describedby="f-cover-hint" />
+                {coverMsg && <div className="err-text" role="alert"><span aria-hidden="true">{'\u26A0'}</span><span>{coverMsg}</span></div>}
+                {cover && (
+                  <div style={{ marginTop: 10, display: 'flex', gap: 12, alignItems: 'center' }}>
+                    <img src={cover.url} alt={'Chosen cover: ' + cover.name} style={{ width: 90, borderRadius: 10, display: 'block' }} />
+                    <div><div className="hint">{cover.name}</div><button type="button" className="btn ghost small" onClick={removeCover}>Remove the cover</button></div>
+                  </div>
+                )}
+              </Field>
+              </>
             ) : (
             <Field id="f-product" label="Product link" error={shown.productLink} hint="Paste the link of the Meesho product.">
               <input id="f-product" type="text" inputMode="url" autoComplete="off" autoCapitalize="off" spellCheck="false" value={f.productLink} onChange={trimmed('productLink')} placeholder="https://www.meesho.com/..."

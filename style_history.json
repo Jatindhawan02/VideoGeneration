@@ -1,38 +1,5 @@
 [
  {
-  "format": "voice_note",
-  "voice": "talk",
-  "job": "story",
-  "ad": "light",
-  "setting": "warm wooden desk",
-  "camera": "low-angle hero shot",
-  "mood": "calm and minimal",
-  "cta": null,
-  "ts": "2026-10-22 18:15"
- },
- {
-  "format": "gift_reveal",
-  "voice": "music",
-  "job": "gift_reveal",
-  "ad": "pure",
-  "setting": "cosy bed with pastel sheets",
-  "camera": "quick whip-pan reveal",
-  "mood": "warm and festive",
-  "cta": null,
-  "ts": "2026-10-23 00:40"
- },
- {
-  "format": "lifestyle_vibe",
-  "voice": "music",
-  "job": "lifestyle",
-  "ad": "light",
-  "setting": "dark moody backdrop with one warm lamp glow",
-  "camera": "slow orbit around the product",
-  "mood": "playful",
-  "cta": null,
-  "ts": "2026-10-23 01:00"
- },
- {
   "format": "product_speaks",
   "voice": "talk",
   "job": "animation",
@@ -108,5 +75,38 @@
   "mood": "calm and minimal",
   "cta": null,
   "ts": "2026-10-26 23:39"
+ },
+ {
+  "format": "pov_skit",
+  "voice": "talk",
+  "job": "pov",
+  "ad": "direct",
+  "setting": "soft pastel gradient backdrop",
+  "camera": "slow macro push-in",
+  "mood": "cosy",
+  "cta": null,
+  "ts": "2026-10-28 08:59"
+ },
+ {
+  "format": "lifestyle_vibe",
+  "voice": "music",
+  "job": "lifestyle",
+  "ad": "pure",
+  "setting": "cosy bed with pastel sheets",
+  "camera": "gentle slide from left to right",
+  "mood": "playful",
+  "cta": null,
+  "ts": "2026-10-28 11:51"
+ },
+ {
+  "format": "narrator_reveal",
+  "voice": "narrator",
+  "job": "reveal",
+  "ad": "direct",
+  "setting": "white marble surface in soft daylight",
+  "camera": "top-down flat lay",
+  "mood": "energetic",
+  "cta": null,
+  "ts": "2026-10-28 14:35"
  }
 ]

@@ -253,6 +253,27 @@ PRICE_ON = ("PRICE RULE: you MAY mention the price once (one spoken line or the 
             "product page. Never invent, round or guess a price and never say 'cheapest'.")
 PRICE_CAPTION = {False: "Do not mention the price. ", True: "You may mention the verified price once, never a guessed one. "}
 
+
+def price_rule(on, price=""):
+    """The price rule for the AI. price = the number read from the product page (digits only, e.g. "199"), "" = none was found.
+    ON but no verified price -> the AI must not mention one (it must never guess)."""
+    price = str(price or "").strip()
+    if not on:
+        return PRICE_OFF
+    if not price:
+        return ("PRICE RULE: the price could not be read from the product page, so do NOT mention any price, cost or number about money. "
+                "Never guess one.")
+    return ("PRICE RULE: the verified price on the product page is Rs %s. Mention it ONCE (in one spoken line or in the caption), "
+            "say it as '%s rupaye' (or 'Rs %s' in the caption), use exactly this number and never round or change it. "
+            "Never say 'cheapest' or 'discount'. It is fine to skip it if it does not fit the line naturally." % (price, price, price))
+
+
+def price_caption(on, price=""):
+    price = str(price or "").strip()
+    if not on or not price:
+        return PRICE_CAPTION[False]
+    return "You may mention the verified price once: Rs %s (exactly this number, never a guessed one). " % price
+
 # groups used by the control page to open the style list section by section
 GROUP_ORDER = ["Story & talk", "Funny & POV", "Gifting", "Festive", "Aesthetic & reveal", "ASMR & satisfying",
                "Animated", "Pet", "How-to & facts"]
@@ -625,12 +646,13 @@ def _fmt_people(f, product_mode, kids):   # kids = True means "do not show peopl
     return product_mode            # "product"
 
 
-def pick(p, r, product_mode="none", kids=False, hist=None, video_type=None, want_cta=None, adult_angle=False, audio=None, forced_format=None, show_price=None, lang=None):
+def pick(p, r, product_mode="none", kids=False, hist=None, video_type=None, want_cta=None, adult_angle=False, audio=None, forced_format=None, show_price=None, lang=None, price=""):
     """Choose the style of the next reel. p, r are the product and the research dict (r["features"] = verified features).
     kids + adult_angle = a children's product that is shown with ADULTS only (the people choice is kept).
     audio = "voice" (someone talks / narrates / sings) | "none" (music or sounds only) | "" (any). Default: AUDIO_MODE from the environment.
     show_price = True / False: may the video or caption mention the price? Default: SHOW_PRICE from the environment (off when unset).
-    lang = "english" | "hinglish" | "both": language of the viral line ideas. Default: TEXT_LANG from the environment (both)."""
+    lang = "english" | "hinglish" | "both": language of the viral line ideas. Default: TEXT_LANG from the environment (both).
+    price = the verified price from the product page (digits, "" = none read): only used when show_price is on."""
     hist = _load() if hist is None else hist
     adult = bool(kids and adult_angle and product_mode in ADULT_SCENE)
     if adult:
@@ -687,7 +709,7 @@ def pick(p, r, product_mode="none", kids=False, hist=None, video_type=None, want
     look = "Camera: %s, %s mood." % (camera, mood)
     sp = bool(show_price if show_price is not None else _flag("SHOW_PRICE", False))
     lang_used = _lang(lang)
-    ideas = hook_ideas(lang_used, sp, pet=(product_mode == "pet"))
+    ideas = hook_ideas(lang_used, bool(sp and str(price or "").strip()), pet=(product_mode == "pet"))      # price lines only when a verified price exists
     trend = read_trends()
     if ideas:
         trend = ((trend + " | ") if trend else "") + "Viral line ideas (optional, adapt to the product, skip if they do not fit): " + " / ".join(ideas)
@@ -707,9 +729,9 @@ def pick(p, r, product_mode="none", kids=False, hist=None, video_type=None, want
         "brief": brief, "plan": plan, "shots": f["shots"], "scene_rule": scene_rule,
         "voice_line": f["voice_line"], "audio_line": f["audio"],
         "yt_line": (f["core"] + " " + look).strip(), "look_extra": look,
-        "ad_brief": AD_BRIEF[ad] + " " + (PRICE_ON if sp else PRICE_OFF),
-        "caption_tone": AD_CAPTION[ad] + PRICE_CAPTION[sp], "caption_cta": cta,
-        "show_price": sp, "text_lang": lang_used, "hook_ideas": ideas,
+        "ad_brief": AD_BRIEF[ad] + " " + price_rule(sp, price),
+        "caption_tone": AD_CAPTION[ad] + price_caption(sp, price), "caption_cta": cta,
+        "show_price": sp, "price": (str(price or "").strip() if sp else ""), "text_lang": lang_used, "hook_ideas": ideas,
         "setting": setting, "camera": camera, "mood": mood, "trend": trend,
     }
 

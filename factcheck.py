@@ -55,6 +55,8 @@ def sources(p):
         "APP SCREEN TEXT": (p.get("page_text") or "")[:6000],
         "PHOTO DESCRIPTION": p.get("visible") or "",
         "TEXT PRINTED ON THE PRODUCT PICTURES": p.get("image_text") or "",
+        # only set when "Mention the price" is on AND the price was read from the page and verified (main_link.get_product)
+        "VERIFIED SELLING PRICE ON THE PAGE": ("The selling price is Rs %s (%s rupees)" % (p["price"], p["price"])) if str(p.get("price") or "").strip().isdigit() else "",
     }
     parts = {k: v.strip() for k, v in parts.items() if v and v.strip()}
     raw = " . ".join(parts.values())

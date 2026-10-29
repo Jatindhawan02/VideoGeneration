@@ -5,7 +5,7 @@ Use: python main_link.py "PRODUCT_LINK"           (make video + caption only, yo
                                                    ONLY if every video check passed)
 """
 import io, os, re, sys, json, time
-import phone, agent, llm, post_guard, auto_dm, find_product, yt_flow, script_writer, verify_video, supervisor, strict_checks, image_facts, factcheck
+import phone, agent, llm, post_guard, auto_dm, find_product, yt_flow, script_writer, verify_video, supervisor, strict_checks, image_facts, factcheck, cover_maker, ref_boost
 from PIL import Image, ImageDraw, ImageFont
 from google.genai import types
 from config import PKG, SHORT_PROMPT_STYLE
@@ -484,9 +484,31 @@ def ground_product(p, ref_path):
     return q
 
 
+SHOW_PRICE = os.getenv("SHOW_PRICE", "").strip().lower() in ("1", "true", "yes", "on")    # "Mention the price" checkbox (server.js)
+_PRICE_RE = re.compile(r"(?:\u20b9|\u00a5|\brs\.?|\binr)\s*(\d[\d,]*)", re.I)
+
+
+def _verified_price(ai_price, texts):
+    """The price may be spoken / written, so it must be REAL. The AI reads it from the screenshots; it is accepted only when the
+    same number is also in the text read from the page (when the page text has any rupee amount). Otherwise: no price, never a guess."""
+    digits = re.sub(r"[^0-9]", "", str(ai_price or "").split(".")[0])
+    if not digits or not (1 <= int(digits) <= 99999):
+        return ""
+    cands = []
+    for t in texts:
+        for m in _PRICE_RE.finditer(t or ""):
+            v = m.group(1).replace(",", "")
+            if v not in cands:
+                cands.append(v)
+    if cands and digits not in cands:
+        print("  Price: the AI read Rs %s but the page text shows %s -> not used (never guessed)" % (digits, ", ".join(cands[:4])))
+        return ""
+    return digits
+
+
 def get_product(shots, texts):
     """AI reads the product name + description from all screenshots and the on-screen text. No questions asked."""
-    name, desc = "", ""
+    name, desc, price = "", "", ""
     seen, hint = set(), []
     for t in texts:
         t = clean_desc(t)
@@ -499,7 +521,9 @@ def get_product(shots, texts):
         "Text that was found on the screens (may include buttons and noise): " + hint_text + "\n\n"
         "Find the product. Return JSON: {\"name\": \"short product name, 3-8 words, no price\", "
         "\"description\": \"1-2 short sentences with the real features (material, size, use, what is in the box) "
-        "that are visible. No price, discount, rating or delivery info. Do not invent anything.\"}"
+        "that are visible. No price, discount, rating or delivery info. Do not invent anything.\"" 
+        + (", \"price\": \"the selling price of THIS product shown on the page, digits only, for example 199 (not the crossed-out MRP, not a "
+           "similar product). Empty string if you cannot clearly see it.\"" if SHOW_PRICE else "") + "}"
     )
 
     def validate(text):
@@ -516,16 +540,20 @@ def get_product(shots, texts):
         info = json.loads(llm.generate(imgs + [prompt], validate=validate))
         name = str(info.get("name", "")).strip()
         desc = clean_desc(info.get("description", ""))
+        if SHOW_PRICE:
+            price = _verified_price(info.get("price", ""), texts)
     except Exception as e:
         print("  AI product page nahi padh paya:", str(e)[:120])
     print("\nProduct page se mila:")
     print("  Naam       :", name or "(nahi mila)")
     print("  Description:", desc or "(nahi mila)")
+    if SHOW_PRICE:
+        print("  Price      :", ("Rs " + price) if price else "(not read: no price will be mentioned)")
     if not name:        # only ask when the AI could not find it at all
         name = input("Naam nahi mila. Product ka naam type karo: ").strip()
     if not name:
         raise RuntimeError("Product ka naam nahi mila. Dobara chalao.")
-    return {"name": name, "description": desc}
+    return {"name": name, "description": desc, "price": price}
 
 
 def list_mp4():
@@ -556,6 +584,7 @@ def write_post(out_dir, url, p, script=None, report=None, regen=False):
     st = (script or {}).get("style") or {}
     cta_line = st.get("caption_cta") or CTA_LINE          # rotating wording, always contains "Comment LINK" (the auto-DM keyword)
     tone = st.get("caption_tone") or ""                   # pure content / light / direct: how much the caption sounds like an ad
+    price_ok = bool(st.get("show_price") and st.get("price"))     # "Mention the price" is on AND a real price was read from the page
     if (script or {}).get("caption_hook"):
         tone += "A possible opening idea (rewrite freely, keep it natural): " + script["caption_hook"] + " "
     if script is not None and not script.get("spoken_cta", True):
@@ -569,7 +598,7 @@ def write_post(out_dir, url, p, script=None, report=None, regen=False):
         + (("What the product photo really shows (looks): " + p["visible"] + "\n") if p.get("visible") else "")
         + (("Specs read from the page: " + p["page_text"][:600] + "\n") if p.get("page_text") else "") +
         "Use ONLY these facts. Do not invent discounts, ratings, materials, sizes or claims.\n"
-        "Rules: simple Hinglish (Hindi in English letters), cute friendly tone, no price, no words like 'guaranteed' or 'best', "
+        "Rules: simple Hinglish (Hindi in English letters), cute friendly tone, " + ("" if price_ok else "no price, ") + "no words like 'guaranteed' or 'best', "
         "at most 3 emojis.\n"
         + tone +
         "caption = ONLY the opening: line 1 is a catchy hook, then 1 or 2 short lines (what the product is, or one relatable moment). "
@@ -716,7 +745,7 @@ def clean_reference_shots():
         return
     n = 0
     for name in names:
-        if name.startswith("product_shot_"):
+        if name.startswith(("product_shot_", "reel_cover_")):
             path = "/sdcard/Pictures/" + name
             try:
                 phone.adb("shell", "rm", "-f", path)
@@ -737,6 +766,25 @@ def make_video_newest(remote_video):
     scan_file(remote_video)
     clean_reference_shots()
     time.sleep(3)
+
+
+_COVER = {"job": None}      # the cover is made in a background thread while the video is generated
+
+
+def _cover_canvas(im):
+    """Any uploaded picture -> 1080x1920 (9:16). A picture of another shape is centred on a blurred copy of itself, never stretched."""
+    from PIL import Image, ImageFilter
+    im = im.convert("RGB")
+    W, H = 1080, 1920
+    if abs(im.width / float(im.height) - W / float(H)) < 0.03:
+        return im.resize((W, H), Image.LANCZOS)
+    k = max(W / float(im.width), H / float(im.height))
+    bg = im.resize((int(im.width * k) + 1, int(im.height * k) + 1))
+    bg = bg.crop(((bg.width - W) // 2, (bg.height - H) // 2, (bg.width - W) // 2 + W, (bg.height - H) // 2 + H)).filter(ImageFilter.GaussianBlur(30))
+    s = min(W / float(im.width), H / float(im.height))
+    fg = im.resize((max(1, int(im.width * s)), max(1, int(im.height * s))), Image.LANCZOS)
+    bg.paste(fg, ((W - fg.width) // 2, (H - fg.height) // 2))
+    return bg
 
 
 def post_to_instagram(d, out_dir, p, report, script=None, with_dm=True):
@@ -763,6 +811,8 @@ def post_to_instagram(d, out_dir, p, report, script=None, with_dm=True):
         return False
     video = os.path.join(out_dir, "video.mp4")
     remote_video = "/sdcard/Movies/reel_%s.mp4" % os.path.basename(out_dir)
+    cover = cover_maker.wait(_COVER.get("job"))         # built + verified while the video was made; never raises
+    cover_path = cover.get("path") if cover.get("ok") else None
     print("\n6/7 Instagram Reel post ho raha hai...")
     print("  caption:\n" + cap)
     odd = sorted(set(c for c in cap if ord(c) > 127))
@@ -772,7 +822,8 @@ def post_to_instagram(d, out_dir, p, report, script=None, with_dm=True):
     phone.push_media(video, remote_video)
     make_video_newest(remote_video)         # newest date + gallery scan + product pictures deleted: the video is the FIRST item
     phone.open_app(d, PKG["instagram"])
-    ok, why = post_guard.post_reel(d, cap, os.path.basename(remote_video))     # checks every stage, never shares unless all is right
+    ok, why = post_guard.post_reel(d, cap, os.path.basename(remote_video), cover_path=cover_path,
+                                   avoid_black=cover_maker.enabled())     # checks every stage, never shares unless all is right
     print("  instagram:", "OK" if ok else "FAIL", "-", why)
     if not ok:
         print("POST SHAYAD NAHI HUA. Instagram khol ke check karo, phir manually post karo. Caption post.txt me hai.")
@@ -825,6 +876,19 @@ def post_gallery_reel(d, out_dir):
     with open(os.path.join(out_dir, "caption.txt"), "w", encoding="utf-8-sig") as f:
         f.write(cap)
     print("  caption (%d characters):\n%s" % (len(cap), cap))
+    cover_path = None
+    up = os.getenv("COVER_UPLOAD", "").strip()           # set by the control page server when a cover picture was uploaded
+    if up and os.path.exists(up):
+        try:
+            from PIL import Image
+            cover_path = os.path.join(out_dir, "cover.png")
+            _cover_canvas(Image.open(up)).save(cover_path)
+            with open(os.path.join(out_dir, "cover_prompt.txt"), "w", encoding="utf-8") as _f:
+                _f.write("Cover uploaded by the user on the control page (not made by AI): " + os.path.basename(up) + "\n")
+            print("  cover: uploaded picture will be used as the Reel cover")
+        except Exception as e:
+            cover_path = None
+            print("  cover: the uploaded picture could not be read (%s) -> Instagram's own cover is used" % str(e)[:80])
     print("3/3 Instagram Reel post ho raha hai...")
     print("PHONE>> busy|The bot is posting the Reel on Instagram.")
     try:
@@ -839,7 +903,7 @@ def post_gallery_reel(d, out_dir):
         except Exception as e:
             print("  (could not make the video the newest file:", str(e)[:80], ")")
         phone.open_app(d, PKG["instagram"])
-        ok, why = post_guard.post_reel(d, cap, os.path.basename(newest))       # checks every stage, never shares unless all is right
+        ok, why = post_guard.post_reel(d, cap, os.path.basename(newest), cover_path=cover_path)       # checks every stage, never shares unless all is right
     finally:
         print("PHONE>> free|Finished. The phone is yours.")
     print("  instagram:", "OK" if ok else "FAIL", "-", why)
@@ -943,11 +1007,18 @@ def main():
                 ref_files.append(_ref)
             except Exception as e:
                 print("  (reference crop skipped:", str(e)[:80], ")")
+        if ref_files:           # YouTube Create takes up to 3: crop other gallery pictures (text/people removed) into extra references
+            try:
+                ref_files = ref_boost.boost(carousel, cls, refs, ref_files, out_dir, crop_fn=crop_product)
+            except Exception as e:
+                print("  (extra reference pictures skipped:", str(e)[:100], ")")
         shot_local = ref_files[0] if ref_files else carousel[0][0]
         print("   Product ki jaankari nikal raha hoon...")
         ai_shots = carousel[:1] + info + carousel[1:2]       # main photo, info section, one more photo
         p = get_product(ai_shots, texts)
         p["page_text"] = build_page_text(texts)
+        if SHOW_PRICE and p.get("price"):         # trusted, so the script fact check accepts the real price (and nothing else about money)
+            p["page_text"] = ("Verified selling price on the page: Rs %s | " % p["price"]) + p["page_text"]
         p["url"] = url                                    # the link holds the full product title
         p["gallery"] = gallery_for_text(carousel, cls)    # the product's own pictures, text/spec pictures first
         image_facts.read(p)                               # specs and features PRINTED on those pictures (trusted source)
@@ -981,6 +1052,8 @@ def main():
             except Exception:
                 pass
             return
+        if do_post:         # the cover is built in the background (API only) while the video is generated
+            _COVER["job"] = cover_maker.start(out_dir, p, script)
         if d is None:       # the product page was read on the PC: the phone is needed only from here (video + posting)
             print("   Ab video ke liye phone connect ho raha hai...")
             d = phone.connect()

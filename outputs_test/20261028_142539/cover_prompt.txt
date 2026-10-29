@@ -1,0 +1,35 @@
+COVER PROMPT FILE
+Product: Women's Crop Zipper Hood Jacket
+
+TEXT FIELDS (drawn by Pillow, never by the image model):
+{
+  "headline": "White Crop Hood",
+  "tagline": "Chic and cozy style",
+  "points": [
+    "Cropped hull",
+    "Front zipper",
+    "Roomy pockets",
+    "S to XL fit"
+  ],
+  "callout": "Great for chills",
+  "labels": [
+    "Zip front",
+    "Two pockets",
+    "Hooded top",
+    "Gift idea"
+  ],
+  "icons": [
+    "check",
+    "check",
+    "heart",
+    "gift"
+  ]
+}
+
+BACKGROUND SCENE: Soft pastel bedroom shelf with a small plant
+
+ATTEMPT 1  palette: soft rose pink and peach  background source: gradient
+Background prompt: A soft, blurred, text-free pastel background for a vertical 9:16 social media product cover. Setting: Soft pastel bedroom shelf with a small plant. Colour palette: soft rose pink and peach. Warm, cute scrapbook mood with a few small pastel flowers, hearts or sparkles near the corners, gentle bokeh light. The centre must stay mostly empty and smooth. Absolutely no text, no letters, no numbers, no logos, no watermark, no people, no product, no picture frames, no borders.
+Check: PASS - ok {"product_matches": true, "text_readable": true, "text_matches": true, "no_price_or_claims": true, "edges_ok": true}
+
+RESULT: OK C:\affiliate-bot\VideoGeneration\outputs_test\20261028_142539\cover.png

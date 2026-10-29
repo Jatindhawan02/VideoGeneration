@@ -1,0 +1,35 @@
+COVER PROMPT FILE
+Product: Black Advocate Coat Pen Holder
+
+TEXT FIELDS (drawn by Pillow, never by the image model):
+{
+  "headline": "Advocate Coat Holder",
+  "tagline": "For your office desk",
+  "points": [
+    "Advocate coat design",
+    "Black and white",
+    "Plastic material",
+    "For pens and pencils"
+  ],
+  "callout": "Use on your office desk",
+  "labels": [
+    "Office desk item",
+    "Advocate coat shape",
+    "Black and white",
+    "Pen and pencil holder"
+  ],
+  "icons": [
+    "gift",
+    "star",
+    "check",
+    "sparkle"
+  ]
+}
+
+BACKGROUND SCENE: Sunny office desk with plants
+
+ATTEMPT 1  palette: soft rose pink and peach  background source: gradient
+Background prompt: A soft, blurred, text-free pastel background for a vertical 9:16 social media product cover. Setting: Sunny office desk with plants. Colour palette: soft rose pink and peach. Warm, cute scrapbook mood with a few small pastel flowers, hearts or sparkles near the corners, gentle bokeh light. The centre must stay mostly empty and smooth. Absolutely no text, no letters, no numbers, no logos, no watermark, no people, no product, no picture frames, no borders.
+Check: PASS - ok {"product_matches": true, "text_readable": true, "text_matches": true, "no_price_or_claims": true, "edges_ok": true}
+
+RESULT: OK C:\affiliate-bot\VideoGeneration\outputs_test\20261028_085313\cover.png

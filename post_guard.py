@@ -14,7 +14,8 @@ If it still fails it does NOT share. After Share was tapped it never retries (th
 
 Used from main_link.py:   ok, why = post_guard.post_reel(d, cap, video_name)
 """
-import json, os, re, time
+import io, json, math, os, re, time
+from PIL import Image, ImageStat
 from google.genai import types
 import agent, llm, phone
 
@@ -68,14 +69,27 @@ def _remember(what, rule):
 
 
 # ----------------------------------------------------------------- free eyes ----
+DURATION_ONLY = re.compile(r"^\s*\d{1,2}:\d{2}\s*$")
+NOT_A_VIDEO = re.compile(r"\b(am|pm)\b|photo|image|screenshot|picture|taken|\d{4}", re.I)     # a photo's description often holds its TIME ("Photo taken 5:45 PM")
+
+
+def _is_duration(n):
+    """Pure helper: is this element a VIDEO duration badge (0:10)? A clock time inside a photo's description is NOT a duration:
+    the element must be just the duration, or say 'video' and not look like a photo description."""
+    t, dsc = (n.get("text") or "").strip(), (n.get("desc") or "").strip()
+    if DURATION_ONLY.match(t) or DURATION_ONLY.match(dsc):
+        return True
+    both = t + " " + dsc
+    return bool(DURATION.search(both)) and "video" in both.lower() and not NOT_A_VIDEO.search(both)
+
+
 def video_badges(nodes, W, H):
     """Pure helper: elements of the gallery GRID (lower part of the screen) that show a duration like 0:08 = video thumbnails.
     Sorted top-left first = the newest video (Recents lists the newest first)."""
     out = []
     for n in nodes:
-        txt = (n.get("text") or "") + " " + (n.get("desc") or "")
         x1, y1, x2, y2 = n["b"]
-        if DURATION.search(txt) and y1 > 0.08 * H and y2 < 0.97 * H:
+        if _is_duration(n) and y1 > 0.08 * H and y2 < 0.97 * H:
             out.append(n)
     out.sort(key=lambda n: (n["b"][1] // max(1, int(0.04 * H)), n["b"][0]))     # rows first, then left to right
     return out
@@ -267,6 +281,7 @@ def _pick_video(d):
     if cands:
         target = tile_for(nodes, cands[0], W, H)
         how = "duration badge '%s' in the screen tree" % ((cands[0].get("text") or cands[0].get("desc") or "")[:30]).strip()
+        print("  [guard] duration badges seen: %s" % [((c.get("text") or c.get("desc") or "")[:40]).strip() for c in cands[:4]])
 
     # 2) the tree shows no duration: the AI looks at the NUMBERED tiles and says which ones have a duration; the code taps the tile
     if target is None:
@@ -451,6 +466,238 @@ def _type_caption(d, cap):
     return True, "caption typed"
 
 
+# ------------------------------------------------------------------ reel cover ----
+# The cover is chosen on the final 'New reel' screen:  Edit cover -> Add from camera roll -> first (newest) picture -> Done.
+# The cover PNG is pushed to the phone only HERE (after the video was picked), so it can never be mistaken for the video in the picker.
+COVER = {"path": None, "avoid_black": False, "remote": "", "dirty": False}
+COVER_DIR = "/sdcard/Pictures"
+COVER_BLACK_LUM = float(os.getenv("COVER_BLACK_LUM", "28"))        # mean brightness 0-255 of a preview below this = black cover
+COVER_STRIP_Y = float(os.getenv("COVER_STRIP_Y", "0.745"))         # height of the frame strip on 'Edit cover' (share of screen height)
+EC_PREVIEW = (0.28, 0.30, 0.72, 0.66)      # big preview on 'Edit cover' (inner part, away from rounded corners)
+EC_REL = (0.06, 0.05, 0.94, 0.95)          # the same part, as a share of the cover picture
+NR_PREVIEW = (0.35, 0.115, 0.65, 0.35)     # small thumbnail on 'New reel' (above the 'Edit cover' pill)
+NR_REL = (0.06, 0.02, 0.94, 0.857)
+COVER_MATCH = 0.5                          # picture similarity (0-1) that counts as "this is my cover"
+
+
+def _shot(d):
+    return Image.open(io.BytesIO(phone.screenshot(d))).convert("RGB")
+
+
+def _crop(im, box):
+    w, h = im.size
+    return im.crop((int(box[0] * w), int(box[1] * h), int(box[2] * w), int(box[3] * h)))
+
+
+def _lum(im):
+    return ImageStat.Stat(im.convert("L")).mean[0]
+
+
+def _corr(a, b, size=(36, 64)):
+    """Similarity of two pictures, -1..1 (grey, tiny). A real cover on screen scores above 0.5, any other picture near 0."""
+    x, y = list(a.convert("L").resize(size).tobytes()), list(b.convert("L").resize(size).tobytes())
+    n = len(x)
+    mx, my = sum(x) / n, sum(y) / n
+    sxx, syy = sum((i - mx) ** 2 for i in x), sum((j - my) ** 2 for j in y)
+    if sxx < 1 or syy < 1:
+        return 0.0
+    return sum((i - mx) * (j - my) for i, j in zip(x, y)) / math.sqrt(sxx * syy)
+
+
+def _good_frame(im):
+    st = ImageStat.Stat(im.convert("L"))
+    return COVER_BLACK_LUM <= st.mean[0] <= 235 and st.stddev[0] >= 14
+
+
+def _cover_matches(d, region, rel):
+    """Is my cover what the screen shows now? Picture comparison first (free), the AI only as a tie-break."""
+    try:
+        score = _corr(_crop(_shot(d), region), _crop(Image.open(COVER["path"]).convert("RGB"), rel))
+    except Exception as e:
+        print("  [guard] cover compare failed:", str(e)[:80])
+        score = 0.0
+    print("  [guard] cover similarity %.2f (need %.2f)" % (score, COVER_MATCH))
+    if score >= COVER_MATCH:
+        return True
+    r = look(d, {"is_cover": "the large picture shows a pastel scrapbook-style product collage with a cream rounded headline banner at the top, "
+                             "product photo cards and a strip of 4 icons at the bottom"})
+    return bool(r and r.get("is_cover"))
+
+
+def _screen_has(d, *words):
+    try:
+        txt = " | ".join(agent._norm(n["text"]) + " " + agent._norm(n["desc"]) for n in agent._ui_nodes(d))
+        return any(agent._norm(w) in txt for w in words)
+    except Exception:
+        return False
+
+
+def _wait_for(d, words, timeout=12):
+    end = time.time() + timeout
+    while time.time() < end:
+        if _screen_has(d, *words):
+            return True
+        time.sleep(1.5)
+    return False
+
+
+def _cover_clean_phone():
+    """Remove old cover files from the phone gallery (and tell the gallery), so the newest picture is always the right one."""
+    old = COVER.get("remote")
+    phone.adb("shell", "rm -f %s/reel_cover_*" % COVER_DIR)
+    if old:
+        phone.adb("shell", "am", "broadcast", "-a", "android.intent.action.MEDIA_SCANNER_SCAN_FILE", "-d", "file://" + old)
+    COVER["remote"] = ""
+
+
+def _cover_push():
+    remote = "%s/reel_cover_%d.png" % (COVER_DIR, int(time.time()))
+    _cover_clean_phone()
+    phone.push_media(COVER["path"], remote)
+    phone.adb("shell", "touch", remote)             # newest in the gallery, also on gallery apps that sort by change time
+    phone.adb("shell", "am", "broadcast", "-a", "android.intent.action.MEDIA_SCANNER_SCAN_FILE", "-d", "file://" + remote)
+    COVER["remote"] = remote
+    time.sleep(3)
+
+
+def _back_to_composer(d, tries=4):
+    """Back out of Edit cover / gallery until the final screen (caption box + Share) is visible again."""
+    for _ in range(tries):
+        if _composer_visible(d):
+            return True
+        phone.adb("shell", "input", "keyevent", "4")
+        time.sleep(2)
+    return _composer_visible(d)
+
+
+def _wait_gallery(d, timeout=15):
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            W, H = agent._screen(d)
+            tiles = grid_tiles(agent._ui_nodes(d), W, H)
+            if tiles:
+                return tiles
+        except Exception:
+            pass
+        time.sleep(1.5)
+    return []
+
+
+def _cover_set(d):
+    """Make MY cover the Reel cover. Returns (ok, why). On failure the screen can be anywhere: the caller backs out."""
+    if not _composer_visible(d):
+        return False, "not on the final screen"
+    W, H = agent._screen(d)
+    _cover_push()
+    if not agent.tap_text(d, ["Edit cover"], timeout=10, avoid_bottom=False):
+        return False, "the Edit cover button was not found"
+    if not _wait_for(d, ["Add from camera roll"], 12):
+        return False, "the Edit cover screen did not open"
+    if not agent.tap_text(d, ["Add from camera roll"], timeout=8, avoid_bottom=False):
+        return False, "the Add from camera roll button was not found"
+    tiles = _wait_gallery(d)
+    COVER["dirty"] = True                           # from here on a failure may leave a wrong cover behind
+    if tiles:
+        x1, y1, x2, y2 = tiles[0]["b"]              # first tile = newest picture = the cover that was just pushed
+        _tap_px(d, (x1 + x2) / 2, (y1 + y2) / 2, W, H)
+    else:
+        print("  [guard] gallery tiles not found by size -> asking the AI to tap the first picture")
+        ok, why = agent.run_task(d, "A photo gallery grid is open. Tap the FIRST picture (top-left, newest) ONCE and nothing else. "
+                                    "Done when the 'Edit cover' screen with a Done button at the top right is visible again.", max_steps=4, key=None)
+        if not ok:
+            return False, "could not pick the first picture: " + str(why)[:100]
+    if not _wait_for(d, ["Add from camera roll"], 10) or not _screen_has(d, "Done"):
+        return False, "did not return to the Edit cover screen after picking the picture"
+    time.sleep(2)
+    if not _cover_matches(d, EC_PREVIEW, EC_REL):
+        return False, "the preview does not show my cover (wrong picture picked)"
+    if not agent.tap_text(d, ["Done"], timeout=8, avoid_bottom=True):
+        return False, "the Done button was not found"
+    end = time.time() + 12
+    while time.time() < end and not _composer_visible(d):
+        time.sleep(1.5)
+    if not _composer_visible(d):
+        return False, "did not return to the final screen after Done"
+    time.sleep(2)
+    if not _cover_matches(d, NR_PREVIEW, NR_REL):
+        return False, "the cover was not applied (thumbnail does not show it)"
+    COVER["dirty"] = False
+    return True, "custom cover applied and verified"
+
+
+def _cover_default(d, force=False):
+    """Safe default: Instagram's own cover from the video, but never a black one. Slides the frame selector until a good frame shows.
+    force=True also repairs a wrong picture left by a failed custom cover."""
+    if not _composer_visible(d):
+        return False, "not on the final screen"
+    W, H = agent._screen(d)
+    lum = _lum(_crop(_shot(d), NR_PREVIEW))
+    print("  [guard] cover thumbnail brightness %d (black below %d)" % (lum, COVER_BLACK_LUM))
+    if lum >= COVER_BLACK_LUM and not force:
+        return True, "default cover is fine"
+    if not agent.tap_text(d, ["Edit cover"], timeout=10, avoid_bottom=False):
+        return False, "the Edit cover button was not found"
+    if not _wait_for(d, ["Add from camera roll"], 12):
+        return False, "the Edit cover screen did not open"
+    sy = int(H * COVER_STRIP_Y)
+    prev = _crop(_shot(d), EC_PREVIEW)
+    chosen, best, mode, cur_x = None, (-1, None), "tap", W * 0.09
+    if _good_frame(prev) and not force:
+        chosen = "start"
+    else:
+        for fr in (0.5, 0.3, 0.7, 0.15, 0.85, 0.4, 0.6):
+            tx = int(W * (0.03 + 0.94 * fr))
+            if mode == "tap":
+                _tap_px(d, tx, sy, W, H)
+            else:
+                try:
+                    d.execute_script("mobile: dragGesture", {"startX": int(cur_x), "startY": sy, "endX": tx, "endY": sy, "speed": 900})
+                except Exception as e:
+                    print("  [guard] drag failed:", str(e)[:80])
+                time.sleep(1.5)
+            cur_x = tx
+            now = _crop(_shot(d), EC_PREVIEW)
+            if mode == "tap" and _corr(prev, now) > 0.985:      # tapping did not move the selector: drag it instead
+                print("  [guard] tapping the strip changed nothing -> dragging the selector")
+                mode, cur_x = "drag", W * 0.09
+                continue
+            prev = now
+            l = _lum(now)
+            if l > best[0]:
+                best = (l, fr)
+            if _good_frame(now):
+                chosen = "position %.2f" % fr
+                break
+    if not chosen and best[1] is not None:
+        print("  [guard] no frame passed the brightness test; best was position %.2f (brightness %d)" % (best[1], best[0]))
+    if not agent.tap_text(d, ["Done"], timeout=8, avoid_bottom=True):
+        return False, "the Done button was not found"
+    ok = _composer_visible(d) or _back_to_composer(d)
+    return ok, ("default cover set (%s)" % chosen) if chosen else "no clearly good frame found, left as is"
+
+
+def _cover_step(d):
+    """Cover step on the final screen. NEVER raises and never stops the post. Returns False only when the final screen is lost."""
+    have = bool(COVER["path"] and os.path.exists(COVER["path"]))
+    if not have and not COVER["avoid_black"]:
+        return True                                  # Reel-only run without an uploaded cover: leave Instagram's default alone
+    try:
+        if have:
+            ok, why = _cover_set(d)
+            print("[guard] cover: %s - %s" % ("OK" if ok else "FAIL -> falling back to the default cover", why))
+            if ok:
+                return True
+            if not _back_to_composer(d):
+                return False
+        if COVER["avoid_black"] or COVER["dirty"]:
+            ok, why = _cover_default(d, force=COVER["dirty"])
+            print("[guard] default cover: %s - %s" % ("OK" if ok else "FAIL", why))
+    except Exception as e:
+        print("[guard] cover step error (the post goes on without it):", str(e)[:150])
+    return _composer_visible(d) or _back_to_composer(d)
+
+
 def _caption_screen(d, cap):
     ok, why = agent.run_task(
         d,
@@ -463,6 +710,8 @@ def _caption_screen(d, cap):
         max_steps=25, key=None)
     if not ok:
         return False, "could not reach the caption screen: " + str(why)[:120]
+    if not _cover_step(d):                          # the cover is set BEFORE the caption is typed
+        return False, "lost the final screen during the cover step"
     r = _final_checks(d, cap)
     if r is None:
         return False, "could not verify the final screen (AI unavailable)"
@@ -619,8 +868,10 @@ def _share(d, cap):
     return True, "Share was tapped but the upload could NOT be confirmed - open Instagram and check before posting again"
 
 
-def post_reel(d, cap, video_name=""):
-    """Returns (ok, why). ok=True means the Reel was shared (or Share was tapped and could not be confirmed)."""
+def post_reel(d, cap, video_name="", cover_path=None, avoid_black=False):
+    """Returns (ok, why). ok=True means the Reel was shared (or Share was tapped and could not be confirmed).
+    cover_path: a verified cover PNG (set as the Reel cover); avoid_black: if there is no custom cover, still make sure the default cover is not black."""
+    COVER.update(path=cover_path, avoid_black=bool(avoid_black), remote="", dirty=False)
     keep = list(agent.FORBIDDEN)
     agent.FORBIDDEN[:] = ["share"]                  # the AI can NEVER tap Share; only _share() does, after all checks
     last = "not started"
@@ -628,8 +879,11 @@ def post_reel(d, cap, video_name=""):
         for rnd in range(1, MAX_ROUNDS + 1):
             print("\n[guard] round %d/%d" % (rnd, MAX_ROUNDS))
             STATE.update(video_tapped=False, how="")
+            COVER["dirty"] = False
             if rnd > 1:
                 _restart_instagram(d)
+                if COVER["path"]:
+                    _cover_clean_phone()
             for name, fn in (("open", lambda: _open_picker(d)), ("pick", lambda: _pick_video(d)), ("caption", lambda: _caption_screen(d, cap))):
                 ok, last = fn()
                 print("[guard] %s: %s - %s" % (name, "OK" if ok else "FAIL", last))

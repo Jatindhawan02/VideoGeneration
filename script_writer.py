@@ -31,6 +31,8 @@ VIDEO_TYPE = os.getenv("VIDEO_TYPE", "auto").strip().lower()
 TEXT_OVERLAY = os.getenv("TEXT_OVERLAY", "").strip().lower() in ("1", "true", "yes", "on")
 # Which texts to show (control page, max 3): name, cute, hook, feature, custom, comment, dm, follow, bio. Empty = name + Comment LINK + Link in your DM.
 OVERLAY_OPTS = [x for x in os.getenv("TEXT_OVERLAY_OPTS", "").strip().lower().split(",") if x][:3]
+# "Mention the price" checkbox on the control page (server.js sets SHOW_PRICE). Off = no price anywhere, exactly as before.
+SHOW_PRICE = os.getenv("SHOW_PRICE", "").strip().lower() in ("1", "true", "yes", "on")
 OVERLAY_CUSTOM = re.sub(r"\s+", " ", os.getenv("TEXT_OVERLAY_CUSTOM", "")).strip()[:40]
 OVERLAY_HOOKS = ["Wait for it", "Look what I found", "Guess what this is", "Watch till the end", "Okay, look at this"]
 OVERLAY_FIXED = {"comment": "Comment LINK", "dm": "Link in your DM", "follow": "Follow for more", "bio": "Shop link in bio"}
@@ -52,6 +54,8 @@ BANNED = ["game changer", "gamechanger", "must have", "must-have", "musthave", "
           "won't believe", "quality", "premium", "value for money",
           "bachha", "bachcha", "baccha", "bachche", "bacche", "baby", "kid", "kids", "child", "children"]
 # Common spoken Hindi words: a Hinglish line must contain at least two (so it is not plain English)
+if SHOW_PRICE:      # price allowed: 'price' / 'sasta' may be spoken (discount, offer, cheap, sale stay banned)
+    BANNED = [w for w in BANNED if w not in ("price", "sasta")]
 HINDI = set("""hai hain ho hota hoti hote tha thi ka ki ke ko se mein toh bas ab abhi yeh ye wo woh tum tumhare aap aapke
 mera meri tera teri apna apni apne yaar arre dekho dekh kar karo kara raha rahi rahe wala wali wale sab kuch koi ek sirf
 bhi hi kabhi har jaise lag laga lagta lagti nikal nikla nikal andar bahar upar neeche liye pata na nahi kya kyun kaise
@@ -334,7 +338,7 @@ CRAFT = (
     "ad-speak. Read each line aloud in your head: if it sounds like an advertisement, rewrite it.\n"
     "- Plain English letters only: no Hindi script, no emojis, no hashtags, no double quotes.\n"
     "- Never write these words: " + ", ".join(sorted(set(b for b in BANNED if " " not in b))) + ".\n"
-    "- No price, discount, rating, health or safety claim, no comparison with other brands.\n"
+    "- @@PRICERULE@@, rating, health or safety claim, no comparison with other brands.\n"
     "- Use ONLY facts from the product page. Never invent a material, size, feature or result.\n\n"
     "- Use only words you hear in daily talk or on Instagram reels. No bookish Hindi, no odd verb forms. Test: say what your two "
     "lines mean in plain English; if that sounds odd@@CONNECT@@, rewrite them.\n"
@@ -520,6 +524,8 @@ def craft(style=None):
     t = CRAFT.replace("@@ANS@@", " Line 2 must logically answer or continue line 1." if ans
                       else " Line 2 must make sense after line 1 (a punchline, twist or reveal is welcome).")
     t = t.replace("@@CONNECT@@", ", or the two lines do not connect" if ans else "")
+    t = t.replace("@@PRICERULE@@", "No discount (the price rule in the FORMAT notes below says if and how the price may be said)" if SHOW_PRICE
+                  else "No price, discount")
     if st and st.get("format") != "classic":      # the GOOD examples are all problem -> solution: they would pull every format back to it
         t = "\n".join(l for l in t.split("\n") if not l.startswith("GOOD"))
     return t
@@ -618,6 +624,12 @@ def _overlay_line(p, r):
         texts.append(random.choice(OVERLAY_HOOKS))
     if "name" in opts and name:
         texts.append(name[:1].upper() + name[1:])
+    if "price" in opts:
+        pr = re.sub(r"[^0-9]", "", str(p.get("price") or ""))
+        if SHOW_PRICE and pr:
+            texts.append("Only %s rupees" % pr)      # no 'Rs' / rupee sign: _clean() removes those with the number
+        else:
+            print("  [script] price text skipped: the price option is off or no price could be read from the page")
     for k in ("cute", "feature"):
         v = ai.get(k, "")
         if k in opts and v:
@@ -732,7 +744,7 @@ def _visual_plan(p, r, st, notes, mode, avoid=""):
         "PRODUCT: " + p["name"] + "\nDETAILS: " + (p["description"] or "none") + "\n" + _visible_line(p) +
         "RESEARCH: " + json.dumps(r, ensure_ascii=False) + "\n" + facts +
         "Anything else in RESEARCH is background, never a claim about the product. Never invent a feature, material, size, count or ability, "
-        "and never show a use the page does not support. Never mention price, discount, 'best' or 'guaranteed'. No child, baby, kid or bachha.\n"
+        "and never show a use the page does not support. Never mention " + ("" if SHOW_PRICE else "price, ") + "discount, 'best' or 'guaranteed'. No child, baby, kid or bachha.\n"
         "FORMAT: " + st["plan"] + "\n" + st["ad_brief"] + "\n"
         "WHAT THE CAMERA SHOWS: " + scene + "\n"
         "LOOK: " + st["setting"] + "; camera: " + st["camera"] + "; " + st["mood"] + " mood.\n"
@@ -864,7 +876,7 @@ def make_script(p, verbose=False, remember=True):
             adult_angle = True
             why += " | child product -> adults only, shown as a fun desk toy / collectible"
             print("  [script] child product with video type '%s': using the ADULT angle (grown-ups use it as a fun gadget, no children shown)" % VIDEO_TYPE)
-    style = reel_styles.pick(p, r, mode, kids, adult_angle=adult_angle)           # voice / video job / ad level, different from the last videos
+    style = reel_styles.pick(p, r, mode, kids, adult_angle=adult_angle, show_price=SHOW_PRICE, price=(p.get("price") or ""))           # voice / video job / ad level, different from the last videos
     if style.get("adult_angle"):
         r["audience"] = "young adults (college students, young professionals) and people looking for a fun gift for a friend"
         r["people_reason"] = why

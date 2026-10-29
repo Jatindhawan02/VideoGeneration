@@ -50,6 +50,52 @@ let captionText = '';  // the Instagram caption printed by main_link.py (also be
 let phoneState = null; // what the bot does with the phone right now: {state: 'free'|'soon'|'busy', msg, seconds, at} (lines "PHONE>> ..." from phone_focus.py)
 
 const CAPTION_FILE = path.join(WORKDIR, 'manual_caption.txt');   // the caption typed on the page for "Only post a Reel" (main_link.py reads it)
+// ---- Reel cover picture uploaded on the page ("Only post a Reel"); main_link.py reads it from COVER_UPLOAD ----
+const COVER_DIR = path.join(WORKDIR, 'cover_upload');
+const COVER_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
+const COVER_MAGIC = {
+  png: b => b.length > 8 && b.slice(0, 4).toString('hex') === '89504e47',
+  jpg: b => b.length > 8 && b.slice(0, 3).toString('hex') === 'ffd8ff',
+  webp: b => b.length > 12 && b.slice(0, 4).toString() === 'RIFF' && b.slice(8, 12).toString() === 'WEBP',
+};
+function coverFile() { for (const e of ['png', 'jpg', 'webp']) { const f = path.join(COVER_DIR, 'cover_upload.' + e); if (fs.existsSync(f)) return f; } return ''; }
+function clearCover() { for (const e of ['png', 'jpg', 'webp', 'json']) { try { fs.unlinkSync(path.join(COVER_DIR, 'cover_upload.' + e)); } catch {} } }
+function handleCover(req, res) {      // GET /cover-upload | GET /cover-upload/file | POST /cover-upload?name=x | DELETE /cover-upload
+  const u = new URL(req.url, 'http://x');
+  if (u.pathname !== '/cover-upload' && u.pathname !== '/cover-upload/file') return false;
+  const text = (code, t) => { res.writeHead(code, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end(t); };
+  if (u.pathname === '/cover-upload/file' && req.method === 'GET') {
+    const f = coverFile(); if (!f) { text(404, 'No cover'); return true; }
+    res.writeHead(200, { 'Content-Type': 'image/' + (f.endsWith('.jpg') ? 'jpeg' : path.extname(f).slice(1)), 'Cache-Control': 'no-store' });
+    fs.createReadStream(f).on('error', () => res.destroy()).pipe(res); return true;
+  }
+  if (u.pathname !== '/cover-upload') { text(405, 'Method not allowed'); return true; }
+  if (req.method === 'GET') {
+    let name = ''; try { name = JSON.parse(fs.readFileSync(path.join(COVER_DIR, 'cover_upload.json'), 'utf8')).name || ''; } catch {}
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({ exists: !!coverFile(), name })); return true;
+  }
+  if (req.method === 'DELETE') { clearCover(); text(200, 'removed'); return true; }
+  if (req.method === 'POST') {
+    const ext = COVER_EXT[String(req.headers['content-type'] || '').split(';')[0].trim()];
+    if (!ext) { text(415, 'Use a PNG, JPG or WebP picture.'); return true; }
+    const MAX = 8 * 1024 * 1024; const chunks = []; let size = 0, tooBig = false;
+    req.on('data', c => { size += c.length; if (size > MAX) { tooBig = true; return; } chunks.push(c); });
+    req.on('end', () => {
+      if (tooBig) return text(413, 'The picture is bigger than 8 MB.');
+      const buf = Buffer.concat(chunks);
+      if (!COVER_MAGIC[ext](buf)) return text(400, 'This file is not a real ' + ext.toUpperCase() + ' picture.');
+      try {
+        fs.mkdirSync(COVER_DIR, { recursive: true }); clearCover();
+        fs.writeFileSync(path.join(COVER_DIR, 'cover_upload.' + ext), buf);
+        fs.writeFileSync(path.join(COVER_DIR, 'cover_upload.json'), JSON.stringify({ name: (u.searchParams.get('name') || 'cover').slice(0, 120) }));
+      } catch (e) { return text(500, 'Could not save the picture: ' + e.message); }
+      text(200, 'saved');
+    });
+    return true;
+  }
+  text(405, 'Method not allowed'); return true;
+}
 const FEEDBACK_FILE = path.join(WORKDIR, 'live_feedback.json');   // notes typed on the page; user_feedback.py (in main_link.py) reads them
 let feedbackItems = [];   // [{id, kind: 'video' | 'phone', text}] of the current run
 let lastRunDir = '';      // output folder of the latest run (printed by user_feedback.py as "RUNDIR>> ...")
@@ -94,7 +140,7 @@ function startHistory(p, extra) {
     startedAt: Date.now(), endedAt: null, status: 'running', mode: p.mode,
     productLink: link, name: reel ? '' : nameFromLink(link),
     params: { productLink: link, mode: p.mode, videoType: p.videoType, reelFormat: p.reelFormat || 'auto', customStyle: p.customStyle || '', audio: p.audio || 'auto',
-              cta: !!p.cta, textOverlay: !!p.textOverlay, overlayOpts: p.overlayOpts || [], overlayCustom: p.overlayCustom || '', caption: reel ? String(p.caption || '') : '' },
+              cta: !!p.cta, showPrice: !!p.showPrice, textLang: p.textLang || 'both', textOverlay: !!p.textOverlay, overlayOpts: p.overlayOpts || [], overlayCustom: p.overlayCustom || '', caption: reel ? String(p.caption || '') : '' },
     redo: !!(extra && extra.redo), feedback: (extra && extra.feedback) || '',
     prompt: '', caption: reel ? String(p.caption || '') : '', folder: '', error: '', logTail: [],
   };
@@ -129,7 +175,9 @@ function histView(h) {      // what the page gets: the entry plus facts about th
   const has = f => { try { return fs.statSync(path.join(dir, f)).isFile(); } catch { return false; } };
   let folderExists = false; try { folderExists = !!dir && fs.statSync(dir).isDirectory(); } catch {}
   const { logTail, ...rest } = h;
-  return { ...rest, folderExists, hasVideo: folderExists && has('video.mp4'), posted: folderExists && has('posted.txt') };
+  let coverPrompt = ''; if (folderExists && has('cover_prompt.txt')) { try { coverPrompt = fs.readFileSync(path.join(dir, 'cover_prompt.txt'), 'utf8').slice(0, 6000); } catch {} }
+  return { ...rest, folderExists, hasVideo: folderExists && has('video.mp4'), posted: folderExists && has('posted.txt'),
+           hasCover: folderExists && has('cover.png'), coverPrompt, coverUploaded: coverPrompt.startsWith('Cover uploaded') };
 }
 function streamVideo(req, res, h, download) {
   const dir = folderPath(h);
@@ -182,6 +230,14 @@ function handleHistory(req, res) {
     text(200, 'deleted'); return true;
   }
   if (action === 'video' && req.method === 'GET') { streamVideo(req, res, h, u.searchParams.has('download')); return true; }
+  if (action === 'cover' && req.method === 'GET') {
+    const dir = folderPath(h); const file = dir ? path.join(dir, 'cover.png') : '';
+    let ok = false; try { ok = !!file && fs.statSync(file).isFile(); } catch {}
+    if (!ok) { text(404, 'The cover is not there (any more).'); return true; }
+    const hd = { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' };
+    if (u.searchParams.has('download')) hd['Content-Disposition'] = `attachment; filename="reel_cover_${h.id}.png"`;
+    res.writeHead(200, hd); fs.createReadStream(file).on('error', () => res.destroy()).pipe(res); return true;
+  }
   if (action === 'open-folder' && req.method === 'POST') {
     const mine = new Set(['127.0.0.1', '::1']);
     Object.values(os.networkInterfaces()).flat().forEach(i => mine.add(i.address));
@@ -459,13 +515,15 @@ async function pipeline(p) {
     } else {
       try { fs.unlinkSync(CAPTION_FILE); } catch {}   // an old caption must never be used by another run
     }
-    log(`\nVideo type: ${p.videoType} | Style: ${p.reelFormat || 'auto'} | Audio: ${p.audio} | CTA: ${p.cta && !noVoice} | Text overlay: ${p.textOverlay ? (p.overlayOpts || []).join('+') : 'off'} | Mode: ${p.mode}`);
+    log(`\nVideo type: ${p.videoType} | Style: ${p.reelFormat || 'auto'} | Audio: ${p.audio} | CTA: ${p.cta && !noVoice} | Price: ${p.showPrice ? 'on' : 'off'} | Text lang: ${p.textLang || 'both'} | Text overlay: ${p.textOverlay ? (p.overlayOpts || []).join('+') : 'off'} | Mode: ${p.mode}`);
     r = await run('python', ['-u', 'main_link.py', ...(reelOnly ? [] : [p.productLink])], {
       cwd: WORKDIR,
       env: {
         PYTHONUNBUFFERED: '1',
         VIDEO_TYPE: p.videoType,
         CTA: String(!!p.cta && !noVoice),
+        SHOW_PRICE: String(!!p.showPrice),                 // 'Mention the price' checkbox
+        TEXT_LANG: TEXT_LANGS.includes(p.textLang) ? p.textLang : 'both',   // language of the viral line ideas
         REEL_FORMAT: (p.reelFormat && p.reelFormat !== 'auto' && p.reelFormat !== 'custom') ? p.reelFormat : '',
         CUSTOM_STYLE: p.reelFormat === 'custom' ? String(p.customStyle || '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, 300) : '',
         AUDIO_MODE: p.audio === 'voice' || p.audio === 'none' ? p.audio : '',
@@ -474,6 +532,7 @@ async function pipeline(p) {
         TEXT_OVERLAY_CUSTOM: p.textOverlay && (p.overlayOpts || []).includes('custom') ? String(p.overlayCustom || '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, 40) : '',
         MODE: p.mode,
         CAPTION_FILE: reelOnly ? CAPTION_FILE : '',      // "Only post a Reel": the caption typed on the page
+        COVER_UPLOAD: reelOnly ? coverFile() : '',       // "Only post a Reel": the cover picture uploaded on the page (empty = none)
         FEEDBACK_FILE,                                  // live notes from the page
         REUSE_RUN: p.redoDir || '',                     // "Make again": re-use the screenshots + script of that folder
         USER_FEEDBACK: p.feedback || '',                // "Make again": the change you asked for
@@ -504,8 +563,9 @@ const VIDEO = ['hands', 'person', 'pet', 'animated'];
 const MODES = ['prompt', 'video', 'post', 'autodm', 'autodmonly', 'reelpost'];
 const LEGACY_MODES = { prompt_only: 'prompt', yt_only: 'video', yt_instagram: 'autodm' };   // old page versions
 const CONNECT_MODES = ['auto', 'manual'];
+const TEXT_LANGS = ['english', 'hinglish', 'both'];
 const AUDIO = ['auto', 'voice', 'none'];            // auto = random, voice = someone talks/narrates/sings, none = music or sounds only
-const OVERLAY_IDS = ['name', 'cute', 'hook', 'feature', 'custom', 'comment', 'dm', 'follow', 'bio'];   // texts that can be shown on the video
+const OVERLAY_IDS = ['name', 'price', 'cute', 'hook', 'feature', 'custom', 'comment', 'dm', 'follow', 'bio'];   // texts that can be shown on the video
 const STYLE_ID = /^[a-z0-9_]{0,40}$/;              // a format id from reel_styles.py ('' or 'auto' = random)
 
 // The list of video styles comes from reel_styles.py itself, so the dropdown never goes out of date.
@@ -563,6 +623,7 @@ function validate(b) {
 
 http.createServer((req, res) => {
   if (req.url.startsWith('/history') && handleHistory(req, res)) return;
+  if (req.url.startsWith('/cover-upload') && handleCover(req, res)) return;
   if (req.method === 'GET' && (req.url === '/' || req.url === '/index.html')) {
     const file = path.join(__dirname, 'index.html');
     return fs.readFile(file, (err, data) => {
@@ -613,7 +674,7 @@ http.createServer((req, res) => {
         await stopJob();          // Start again while running = stop first, then start fresh
       }
       lastParams = { pairLink: b.pairLink, pairPin: b.pairPin, connectLink: b.connectLink, productLink: b.productLink,
-                     videoType: b.videoType, reelFormat: b.reelFormat || 'auto', customStyle: String(b.customStyle || ''), audio: b.audio || 'auto', cta: !!b.cta, textOverlay: !!b.textOverlay, overlayOpts: Array.isArray(b.overlayOpts) ? b.overlayOpts.filter(x => OVERLAY_IDS.includes(x)).slice(0, 3) : [], overlayCustom: String(b.overlayCustom || '').slice(0, 40), mode: b.mode, connectMode: b.connectMode,
+                     videoType: b.videoType, reelFormat: b.reelFormat || 'auto', customStyle: String(b.customStyle || ''), audio: b.audio || 'auto', cta: !!b.cta, showPrice: !!b.showPrice, textLang: TEXT_LANGS.includes(b.textLang) ? b.textLang : 'both', textOverlay: !!b.textOverlay, overlayOpts: Array.isArray(b.overlayOpts) ? b.overlayOpts.filter(x => OVERLAY_IDS.includes(x) && (b.showPrice || x !== 'price')).slice(0, 3) : [], overlayCustom: String(b.overlayCustom || '').slice(0, 40), mode: b.mode, connectMode: b.connectMode,
                      caption: String(b.caption || '').replace(/\r\n?/g, '\n').slice(0, 2200) };
       res.writeHead(200); res.end('started');
       startHistory(lastParams, { redo: !!b.redo, feedback });      // saved in the History tab

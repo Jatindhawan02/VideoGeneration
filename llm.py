@@ -299,3 +299,101 @@ def generate(contents, json_mode=True, rounds=4, validate=None):
         raise last or RuntimeError("No usable AI provider (all keys/models look wrong). Check .env")
     mins = max(1, int((min(_busy.get(k, 0) for k in live) - time.time()) / 60) + 1)
     raise AllBusy(f"All AI providers are resting. Earliest one is free in about {mins} min. STOP and run again later. Last error: {str(last)[:150]}")
+
+
+# ------------------------------------------------------------------------------------ image making ----
+# Used by cover_maker.py for the TEXT-FREE background of the Reel cover. Model names come from .env, nothing is guessed:
+#   IMAGE_PROVIDER_ORDER=gemini,cloudflare,zai,openrouter      (default)
+#   IMAGE_MODEL=<gemini image model>                           (used by every Gemini key; or GEMINI_IMAGE_MODEL)
+#   CLOUDFLARE_IMAGE_MODEL / ZAI_IMAGE_MODEL / OPENROUTER_IMAGE_MODEL   (need the same keys/account id as for text)
+#   IMAGE_SIZE=768x1344                                        (only for providers that accept a size)
+# A provider with no model in .env is skipped. If none works, generate_image raises and cover_maker falls back to a plain gradient.
+IMAGE_ORDER = [p.strip().lower() for p in os.getenv("IMAGE_PROVIDER_ORDER", "gemini,cloudflare,zai,openrouter").split(",") if p.strip()]
+
+
+def _image_slots():
+    out = []
+    for p in IMAGE_ORDER:
+        if p == "gemini":
+            m = _env("GEMINI_IMAGE_MODEL") or _env("IMAGE_MODEL")
+            if m:
+                out.extend((kind, m) for kind in _gems)
+        elif p in ("cloudflare", "zai", "openrouter"):
+            m = _env(p.upper() + "_IMAGE_MODEL")
+            if m and _key(p) and (p != "cloudflare" or _env("CLOUDFLARE_ACCOUNT_ID")):
+                out.append((p, m))
+    return out
+
+
+def _image_call(kind, model, prompt):
+    size = _env("IMAGE_SIZE") or "768x1344"
+    if kind in _gems:
+        cfg = types.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"])
+        resp = _gems[kind].models.generate_content(model=model, contents=[prompt], config=cfg)
+        for c in (resp.candidates or []):
+            for part in (c.content.parts or []):
+                data = getattr(getattr(part, "inline_data", None), "data", None)
+                if data:
+                    return data
+        raise RuntimeError("no image in the answer from " + kind)
+    if kind == "cloudflare":
+        r = requests.post("https://api.cloudflare.com/client/v4/accounts/" + _env("CLOUDFLARE_ACCOUNT_ID") + "/ai/run/" + model,
+                          headers={"Authorization": "Bearer " + _key("cloudflare")}, json={"prompt": prompt}, timeout=120)
+        if r.status_code != 200:
+            raise _Http(r.status_code, r.text, r.headers.get("retry-after"))
+        if r.headers.get("content-type", "").startswith("image/"):
+            return r.content
+        b64 = (r.json().get("result") or {}).get("image")
+        if not b64:
+            raise RuntimeError("no image in the answer from cloudflare")
+        return base64.b64decode(b64)
+    if kind == "zai":
+        r = requests.post(COMPAT_URLS["zai"] + "/images/generations", headers={"Authorization": "Bearer " + _key("zai")},
+                          json={"model": model, "prompt": prompt, "size": size}, timeout=120)
+        if r.status_code != 200:
+            raise _Http(r.status_code, r.text, r.headers.get("retry-after"))
+        url = (r.json().get("data") or [{}])[0].get("url")
+        if not url:
+            raise RuntimeError("no image url in the answer from zai")
+        g = requests.get(url, timeout=60)
+        g.raise_for_status()
+        return g.content
+    if kind == "openrouter":
+        r = requests.post(COMPAT_URLS["openrouter"] + "/chat/completions", headers={"Authorization": "Bearer " + _key("openrouter")},
+                          json={"model": model, "modalities": ["image", "text"], "messages": [{"role": "user", "content": prompt}]}, timeout=120)
+        if r.status_code != 200:
+            raise _Http(r.status_code, r.text, r.headers.get("retry-after"))
+        imgs = (r.json()["choices"][0]["message"].get("images") or [])
+        url = ((imgs[0] or {}).get("image_url") or {}).get("url", "") if imgs else ""
+        if not url.startswith("data:"):
+            raise RuntimeError("no image in the answer from openrouter")
+        return base64.b64decode(url.split(",", 1)[1])
+    raise RuntimeError("unknown image provider " + kind)
+
+
+def generate_image(prompt):
+    """Returns image bytes (PNG/JPEG). Tries each image slot once per round, rests failing ones like generate() does.
+    Never waits for a resting provider: raises instead, so the caller can use its fallback."""
+    slots = _image_slots()
+    if not slots:
+        raise RuntimeError("no image model set in .env (IMAGE_MODEL / <PROVIDER>_IMAGE_MODEL)")
+    last = None
+    for kind, model in slots:
+        k = "img:" + kind + ":" + model
+        if k in _dead or _busy.get(k, 0) > time.time():
+            continue
+        wait = (GEMINI_GAP if kind in _gems else OTHER_GAP) - (time.time() - _last.get(k, 0))
+        if wait > 0:
+            time.sleep(wait)
+        _last[k] = time.time()
+        try:
+            data = _image_call(kind, model, prompt)
+            from PIL import Image
+            import io
+            Image.open(io.BytesIO(data)).verify()          # really an image?
+            print("  [" + k + "] image ok")
+            return data
+        except Exception as e:
+            last = e
+            _rest(k, e)
+    raise RuntimeError("no image could be made: " + str(last)[:150])

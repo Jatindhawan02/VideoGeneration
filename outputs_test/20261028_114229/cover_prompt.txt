@@ -1,0 +1,35 @@
+COVER PROMPT FILE
+Product: White Quilted Handbag with Chain
+
+TEXT FIELDS (drawn by Pillow, never by the image model):
+{
+  "headline": "White Quilted Bag",
+  "tagline": "A white quilted handbag",
+  "points": [
+    "Quilted design",
+    "Gold-tone chain",
+    "Gold-tone clasp",
+    "Diamond pattern"
+  ],
+  "callout": "For casual occasions",
+  "labels": [
+    "Gold clasp",
+    "Chain strap",
+    "Casual style",
+    "Gift idea"
+  ],
+  "icons": [
+    "diamond",
+    "sparkle",
+    "check",
+    "gift"
+  ]
+}
+
+BACKGROUND SCENE: A bright sunlit dressing table
+
+ATTEMPT 1  palette: soft rose pink and peach  background source: gradient
+Background prompt: A soft, blurred, text-free pastel background for a vertical 9:16 social media product cover. Setting: A bright sunlit dressing table. Colour palette: soft rose pink and peach. Warm, cute scrapbook mood with a few small pastel flowers, hearts or sparkles near the corners, gentle bokeh light. The centre must stay mostly empty and smooth. Absolutely no text, no letters, no numbers, no logos, no watermark, no people, no product, no picture frames, no borders.
+Check: PASS - ok {"product_matches": true, "text_readable": true, "text_matches": true, "no_price_or_claims": true, "edges_ok": true}
+
+RESULT: OK C:\affiliate-bot\VideoGeneration\outputs_test\20261028_114229\cover.png
